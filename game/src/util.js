@@ -1,26 +1,36 @@
-// util.js — small math and seeded-random helpers shared by every system.
-// Nothing here knows about the game itself; it is pure arithmetic.
+// util.js — shared math, angles and seeded randomness for Vice City Nights.
+// Every helper here is pure: no game state, no DOM, no side effects.
+
 export const TAU = Math.PI * 2;
 
+/** Clamp v into [lo, hi]. */
 export function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
 }
 
+/** Linear interpolation between a and b. */
 export function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+/** Euclidean distance between two points. */
 export function dist(x1, y1, x2, y2) {
   const dx = x2 - x1;
   const dy = y2 - y1;
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+/** Angle from (x1, y1) toward (x2, y2). */
 export function angleTo(x1, y1, x2, y2) {
   return Math.atan2(y2 - y1, x2 - x1);
 }
 
-// Shortest signed turn from angle a toward angle b, in (-PI, PI].
+/**
+ * Shortest signed rotation from angle a to angle b, in (-PI, PI].
+ * Lets cars and characters turn the short way around.
+ */
 export function angleDelta(a, b) {
   let d = (b - a) % TAU;
   if (d > Math.PI) d -= TAU;
@@ -28,16 +38,18 @@ export function angleDelta(a, b) {
   return d;
 }
 
+/** Interpolate angles along the shortest arc. */
 export function angleLerp(a, b, t) {
   return a + angleDelta(a, b) * clamp(t, 0, 1);
 }
 
-// Deterministic PRNG (mulberry32) so the city and the staged screenshot
-// scenes rebuild identically from a seed.
+/**
+ * mulberry32: a tiny deterministic PRNG. The same seed always yields the
+ * same sequence, so the city and every staged screenshot rebuild exactly.
+ */
 export function mulberry32(seed) {
   let a = seed >>> 0;
   return function next() {
-    a |= 0;
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
@@ -45,6 +57,7 @@ export function mulberry32(seed) {
   };
 }
 
+/** Convenience wrapper: next(), range(), int(), pick(), chance(). */
 export function makeRng(seed) {
   const next = mulberry32(seed);
   return {
@@ -64,7 +77,7 @@ export function makeRng(seed) {
   };
 }
 
-// A tiny deterministic hash of a string, used to seed scenes by name.
+/** FNV-1a hash of a string, used to seed staged scenes by name. */
 export function hashString(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -74,10 +87,12 @@ export function hashString(s) {
   return h >>> 0;
 }
 
+/** "$1,240" style money formatting. */
 export function fmtMoney(n) {
   return '$' + Math.floor(n).toLocaleString('en-US');
 }
 
+/** "3:07" style clock formatting for seconds. */
 export function fmtTime(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);

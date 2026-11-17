@@ -1,12 +1,25 @@
 // traffic.js — the living city: traffic cars that follow the road grid
-// and pedestrians who stroll the sidewalks and flee from danger.
+// (turning at intersections, queuing behind each other) and pedestrians
+// who stroll the sidewalks and flee from gunfire and high wanted levels.
 import { makeRng, clamp, dist, angleTo, angleLerp } from './util.js';
 import { roadPoint, sidewalkPoint, resolveBuildingCollision } from './city.js';
 import { createCar, collideCars } from './vehicles.js';
 
-const PED_COLORS = ['#e05a5a', '#5a8ae0', '#5ad08a', '#e0a05a', '#a05ad0', '#d0d0d0', '#e08ab0'];
+const PED_SKINS = ['#e05a5a', '#5a8ae0', '#5ad08a', '#e0a05a', '#a05ad0', '#d0d0d0', '#e08ab0'];
 const PED_SHIRTS = ['#d04040', '#3f7fd0', '#4aa864', '#c0a040', '#8a5fc0', '#606060', '#c06090'];
 
+/** The road line nearest a value, used to snap cars onto their lane. */
+function nearestRoad(roads, v) {
+  let best = roads[0];
+  let bestD = Infinity;
+  for (const r of roads) {
+    const d = Math.abs(r - v);
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+
+/** Spawn the moving traffic: cars with a route along one road line. */
 export function createTraffic(G, count) {
   const rng = makeRng(G.seed + 77);
   const cars = [];
@@ -29,16 +42,7 @@ export function createTraffic(G, count) {
   return cars;
 }
 
-function nearestRoad(roads, v) {
-  let best = roads[0];
-  let bestD = Infinity;
-  for (const r of roads) {
-    const d = Math.abs(r - v);
-    if (d < bestD) { bestD = d; best = r; }
-  }
-  return best;
-}
-
+/** Spawn parked cars along the roads, clear of the spawn and each other. */
 export function createParkedCars(G, count) {
   const rng = makeRng(G.seed + 78);
   const cars = [];
@@ -55,7 +59,6 @@ export function createParkedCars(G, count) {
       car.angle = rng.chance(0.5) ? 0 : Math.PI;
       car.y = nearestRoad(G.city.roadsH, p.y) + (rng.chance(0.5) ? 36 : -36);
     }
-    // Keep parked cars clear of the spawn and of each other.
     if (dist(car.x, car.y, G.city.spawn.x, G.city.spawn.y) < 220) continue;
     if (cars.some((c) => dist(c.x, c.y, car.x, car.y) < 70)) continue;
     cars.push(car);
@@ -63,14 +66,55 @@ export function createParkedCars(G, count) {
   return cars;
 }
 
+/** Distance to the nearest car ahead on the same route line. */
+function carAhead(G, car) {
+  let best = Infinity;
+  for (const other of [...G.trafficCars, ...G.cars]) {
+    if (other === car) continue;
+    const dx = other.x - car.x;
+    const dy = other.y - car.y;
+    const forward = car.route.axis === 'v' ? dy * car.route.dir : dx * car.route.dir;
+    const lateral = car.route.axis === 'v' ? Math.abs(dx) : Math.abs(dy);
+    if (forward > 0 && forward < best && lateral < 26) best = forward;
+  }
+  return best === Infinity ? 0 : best;
+}
+
+/** The next crossing ahead on the perpendicular road lines. */
+function nextIntersection(roads, pos, dir) {
+  let best = null;
+  for (const r of roads) {
+    const d = (r - pos) * dir;
+    if (d > 4 && (best === null || d < best)) best = r;
+  }
+  return best;
+}
+
+/** At an intersection, sometimes turn onto the crossing road. */
+function maybeTurn(G, car, axis, at) {
+  if (Math.random() > 0.3) return;
+  const city = G.city;
+  if (axis === 'v') {
+    car.y = at;
+    const line = nearestRoad(city.roadsH, at);
+    car.route = { axis: 'h', line, dir: Math.random() < 0.5 ? 1 : -1 };
+    car.y = line + (car.route.dir > 0 ? 22 : -22);
+  } else {
+    car.x = at;
+    const line = nearestRoad(city.roadsV, at);
+    car.route = { axis: 'v', line, dir: Math.random() < 0.5 ? 1 : -1 };
+    car.x = line + (car.route.dir > 0 ? 22 : -22);
+  }
+}
+
+/** Advance traffic cars, handle bumps, and let the player ram traffic. */
 export function updateTraffic(G, dt) {
   const city = G.city;
   for (const car of G.trafficCars) {
     if (!car.route) continue;
-    // Drive along the route line; at an intersection, maybe turn.
-    const targetSpeed = 110;
+    // Follow the route line; slow down for the car ahead.
     const ahead = carAhead(G, car);
-    const want = ahead ? Math.max(0, ahead - 40) : targetSpeed;
+    const want = ahead ? Math.max(0, ahead - 40) : 110;
     car.speed += clamp(want - car.speed, -260 * dt, 200 * dt);
     const step = car.speed * dt;
     if (car.route.axis === 'v') {
@@ -78,24 +122,19 @@ export function updateTraffic(G, dt) {
       car.x += (car.route.line + (car.route.dir > 0 ? 22 : -22) - car.x) * Math.min(1, dt * 3);
       car.angle = angleLerp(car.angle, car.route.dir > 0 ? Math.PI / 2 : -Math.PI / 2, dt * 4);
       const next = nextIntersection(city.roadsH, car.y, car.route.dir);
-      if (next !== null && Math.abs(car.y - next) < Math.abs(step) + 2) {
-        maybeTurn(G, car, 'v', next);
-      }
+      if (next !== null && Math.abs(car.y - next) < Math.abs(step) + 2) maybeTurn(G, car, 'v', next);
       if (car.y < 60 || car.y > city.H - 60) car.route.dir *= -1;
     } else {
       car.x += car.route.dir * step;
       car.y += (car.route.line + (car.route.dir > 0 ? 22 : -22) - car.y) * Math.min(1, dt * 3);
       car.angle = angleLerp(car.angle, car.route.dir > 0 ? 0 : Math.PI, dt * 4);
       const next = nextIntersection(city.roadsV, car.x, car.route.dir);
-      if (next !== null && Math.abs(car.x - next) < Math.abs(step) + 2) {
-        maybeTurn(G, car, 'h', next);
-      }
+      if (next !== null && Math.abs(car.x - next) < Math.abs(step) + 2) maybeTurn(G, car, 'h', next);
       if (car.x < 60 || car.x > city.W - 60) car.route.dir *= -1;
     }
-    // Keep traffic out of buildings (should not happen on roads, but be safe).
     resolveBuildingCollision(city, car, car.len * 0.4);
   }
-  // Car-car bumps.
+  // Bumps between traffic and parked cars.
   const all = [...G.trafficCars, ...G.cars];
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
@@ -117,48 +156,24 @@ export function updateTraffic(G, dt) {
   }
 }
 
-function carAhead(G, car) {
-  // Distance to the nearest car in front on the same route line.
-  let best = Infinity;
-  for (const other of [...G.trafficCars, ...G.cars]) {
-    if (other === car) continue;
-    const dx = other.x - car.x;
-    const dy = other.y - car.y;
-    const forward = car.route.axis === 'v'
-      ? dy * car.route.dir
-      : dx * car.route.dir;
-    const lateral = car.route.axis === 'v' ? Math.abs(dx) : Math.abs(dy);
-    if (forward > 0 && forward < best && lateral < 26) best = forward;
-  }
-  return best === Infinity ? 0 : best;
-}
-
-function nextIntersection(roads, pos, dir) {
-  let best = null;
-  for (const r of roads) {
-    const d = (r - pos) * dir;
-    if (d > 4 && (best === null || d < best)) best = r;
-  }
-  return best;
-}
-
-function maybeTurn(G, car, axis, at) {
-  if (Math.random() > 0.3) return; // 30% chance to turn at each crossing
-  const city = G.city;
-  if (axis === 'v') {
-    car.y = at;
-    const line = nearestRoad(city.roadsH, at);
-    car.route = { axis: 'h', line, dir: Math.random() < 0.5 ? 1 : -1 };
-    car.y = line + (car.route.dir > 0 ? 22 : -22);
-  } else {
-    car.x = at;
-    const line = nearestRoad(city.roadsV, at);
-    car.route = { axis: 'v', line, dir: Math.random() < 0.5 ? 1 : -1 };
-    car.x = line + (car.route.dir > 0 ? 22 : -22);
-  }
-}
-
 // ---- pedestrians ------------------------------------------------------
+
+function makePed(x, y, rng) {
+  const i = rng.int(0, PED_SKINS.length - 1);
+  return {
+    x, y,
+    angle: rng.range(0, Math.PI * 2),
+    speed: rng.range(45, 80),
+    color: PED_SKINS[i],
+    shirt: PED_SHIRTS[i],
+    panic: 0,
+    flee: false,
+    fleeX: 0, fleeY: 0,
+    wanderT: rng.range(0, 4),
+    target: null,
+    walkPhase: rng.range(0, 6),
+  };
+}
 
 export function createPedestrians(G, count) {
   const rng = makeRng(G.seed + 79);
@@ -170,23 +185,7 @@ export function createPedestrians(G, count) {
   return peds;
 }
 
-function makePed(x, y, rng) {
-  const i = rng.int(0, PED_COLORS.length - 1);
-  return {
-    x, y,
-    angle: rng.range(0, Math.PI * 2),
-    speed: rng.range(45, 80),
-    color: PED_COLORS[i],
-    shirt: PED_SHIRTS[i],
-    panic: 0,
-    flee: false,
-    fleeX: 0, fleeY: 0,
-    wanderT: rng.range(0, 4),
-    target: null,
-    walkPhase: rng.range(0, 6),
-  };
-}
-
+/** Pedestrians wander, or run from gunfire and from a high wanted level. */
 export function updatePedestrians(G, dt) {
   for (const ped of G.peds) {
     ped.walkPhase += dt * 8;
@@ -215,12 +214,12 @@ export function updatePedestrians(G, dt) {
     } else {
       ped.wanderT -= dt;
       if (!ped.target || ped.wanderT <= 0 || dist(ped.x, ped.y, ped.target.x, ped.target.y) < 24) {
-        const rng = Math.random;
+        const r = Math.random;
         ped.target = {
-          x: clamp(ped.x + (rng() - 0.5) * 500, 30, G.city.W - 30),
-          y: clamp(ped.y + (rng() - 0.5) * 500, 30, G.city.H - 30),
+          x: clamp(ped.x + (r() - 0.5) * 500, 30, G.city.W - 30),
+          y: clamp(ped.y + (r() - 0.5) * 500, 30, G.city.H - 30),
         };
-        ped.wanderT = 3 + rng() * 4;
+        ped.wanderT = 3 + r() * 4;
       }
       tx = ped.target.x;
       ty = ped.target.y;

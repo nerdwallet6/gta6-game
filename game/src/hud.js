@@ -1,6 +1,7 @@
-// hud.js — every screen the player sees: the in-game HUD (health, money,
-// wanted stars, speed, mission objective), the canvas minimap, dialogue
-// boxes, and the start / pause / busted / wasted / complete screens.
+// hud.js — every screen the player sees: the in-game HUD (health,
+// money, wanted stars, speed, mission objective), the live canvas
+// minimap, dialogue boxes, and the start / pause / busted / wasted /
+// complete screens.
 import { clamp, fmtMoney, fmtTime } from './util.js';
 import { drawMinimapBase } from './city.js';
 import { currentMission, currentStep, missionTarget } from './missions.js';
@@ -8,6 +9,18 @@ import { currentMission, currentStep, missionTarget } from './missions.js';
 const W = 1280;
 const H = 720;
 
+/** Filled rounded-rectangle panel path, used by every HUD card. */
+function panel(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** One wanted star: filled gold when lit, ghosted otherwise. */
 function star(ctx, x, y, r, filled) {
   ctx.beginPath();
   for (let i = 0; i < 10; i++) {
@@ -26,18 +39,47 @@ function star(ctx, x, y, r, filled) {
   ctx.stroke();
 }
 
+/** Word-wrap a line of dialogue inside the box. */
+function wrapText(ctx, text, x, y, maxW, lh) {
+  const words = text.split(' ');
+  let line = '';
+  let cy = y;
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxW && line) {
+      ctx.fillText(line, x, cy);
+      line = word;
+      cy += lh;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x, cy);
+}
+
+/** True when a stealable car is within E range of the player. */
+function nearCar(G) {
+  if (!G.player.onFoot) return false;
+  for (const car of G.cars) {
+    const dx = car.x - G.player.x;
+    const dy = car.y - G.player.y;
+    if (dx * dx + dy * dy < 70 * 70) return true;
+  }
+  return false;
+}
+
 export function drawHUD(ctx, G) {
   const p = G.player;
-  // ---- top-left: health, money, wanted ----
   ctx.save();
+
+  // ---- top-left: name, health bar, money, missions ----
   ctx.fillStyle = 'rgba(10,12,20,0.55)';
-  roundRectPath(ctx, 14, 14, 250, 86, 10);
+  panel(ctx, 14, 14, 250, 86, 10);
   ctx.fill();
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 15px sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText('RAE SOLANO', 26, 36);
-  // Health bar.
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(26, 44, 180, 12);
   ctx.fillStyle = p.health > 50 ? '#4ade80' : p.health > 25 ? '#f5b83d' : '#ef4444';
@@ -45,17 +87,17 @@ export function drawHUD(ctx, G) {
   ctx.fillStyle = '#fff';
   ctx.font = '11px sans-serif';
   ctx.fillText(Math.round(p.health) + ' HP', 212, 55);
-  // Money.
   ctx.fillStyle = '#7CFC9A';
   ctx.font = 'bold 20px sans-serif';
   ctx.fillText(fmtMoney(G.money), 26, 82);
   ctx.fillStyle = '#c8d0dc';
   ctx.font = '12px sans-serif';
   ctx.fillText('Missions: ' + G.missionsDone + ' / 5', 150, 82);
-  // Wanted stars.
+
+  // ---- wanted stars (flashing red while the heat is fresh) ----
   const flash = G.wantedFlash > 0 && Math.floor(G.time * 6) % 2 === 0;
   ctx.fillStyle = flash ? 'rgba(239,68,68,0.55)' : 'rgba(10,12,20,0.55)';
-  roundRectPath(ctx, 14, 108, 250, 40, 10);
+  panel(ctx, 14, 108, 250, 40, 10);
   ctx.fill();
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 13px sans-serif';
@@ -70,24 +112,32 @@ export function drawHUD(ctx, G) {
     ctx.fillText(G.lastWantedReason, 28, 165);
   }
 
-  // ---- bottom-left: controls hint / context prompt ----
+  // ---- bottom-left: controls hint and context prompt ----
   ctx.fillStyle = 'rgba(10,12,20,0.55)';
-  roundRectPath(ctx, 14, H - 64, 430, 50, 10);
+  panel(ctx, 14, H - 64, 430, 50, 10);
   ctx.fill();
   ctx.fillStyle = '#e8ecf2';
   ctx.font = '12px sans-serif';
-  ctx.fillText(p.onFoot
-    ? 'WASD move · Shift sprint · E enter car · Click shoot · F punch · R reload'
-    : 'WASD drive · Space brake · E exit car · Click shoot (on foot) · P pause', 26, H - 44);
+  ctx.fillText(
+    p.onFoot
+      ? 'WASD move · Shift sprint · E enter car · Click shoot · F punch · R reload'
+      : 'WASD drive · Space brake · E exit car · Click shoot (on foot) · P pause',
+    26, H - 44,
+  );
   ctx.fillStyle = '#ffd25f';
-  ctx.fillText(p.onFoot && nearestCarHint(G) ? 'E — enter car' : (p.car ? 'E — exit car · ' + Math.round(Math.abs(p.car.speed) * 0.36) + ' km/h' : ''), 26, H - 26);
+  ctx.fillText(
+    p.onFoot && nearCar(G)
+      ? 'E — enter car'
+      : (p.car ? 'E — exit car · ' + Math.round(Math.abs(p.car.speed) * 0.36) + ' km/h' : ''),
+    26, H - 26,
+  );
 
-  // ---- bottom-centre: mission objective ----
+  // ---- bottom-centre: current mission objective ----
   const m = currentMission(G);
   const step = currentStep(G);
   if (m && G.mission.started) {
     ctx.fillStyle = 'rgba(10,12,20,0.65)';
-    roundRectPath(ctx, W / 2 - 260, H - 64, 520, 50, 10);
+    panel(ctx, W / 2 - 260, H - 64, 520, 50, 10);
     ctx.fill();
     ctx.fillStyle = '#ffd25f';
     ctx.font = 'bold 13px sans-serif';
@@ -107,7 +157,7 @@ export function drawHUD(ctx, G) {
     ctx.globalAlpha = clamp(G.noticeT, 0, 1);
     ctx.fillStyle = 'rgba(10,12,20,0.7)';
     const tw = ctx.measureText(G.notice).width + 32;
-    roundRectPath(ctx, W / 2 - tw / 2, 16, tw, 30, 8);
+    panel(ctx, W / 2 - tw / 2, 16, tw, 30, 8);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 14px sans-serif';
@@ -117,10 +167,10 @@ export function drawHUD(ctx, G) {
     ctx.globalAlpha = 1;
   }
 
-  // ---- bust meter ----
+  // ---- bust countdown ----
   if (G.bustMeter > 0) {
     ctx.fillStyle = 'rgba(10,12,20,0.7)';
-    roundRectPath(ctx, W / 2 - 130, 56, 260, 26, 8);
+    panel(ctx, W / 2 - 130, 56, 260, 26, 8);
     ctx.fill();
     ctx.fillStyle = '#ef4444';
     ctx.font = 'bold 13px sans-serif';
@@ -134,7 +184,7 @@ export function drawHUD(ctx, G) {
     const d = G.mission.dialogue;
     const line = d.lines[d.i];
     ctx.fillStyle = 'rgba(8,10,18,0.82)';
-    roundRectPath(ctx, W / 2 - 340, H - 150, 680, 72, 10);
+    panel(ctx, W / 2 - 340, H - 150, 680, 72, 10);
     ctx.fill();
     ctx.strokeStyle = '#ffd25f';
     ctx.lineWidth = 2;
@@ -155,16 +205,7 @@ export function drawHUD(ctx, G) {
   ctx.restore();
 }
 
-function nearestCarHint(G) {
-  if (!G.player.onFoot) return false;
-  for (const car of G.cars) {
-    const dx = car.x - G.player.x;
-    const dy = car.y - G.player.y;
-    if (dx * dx + dy * dy < 70 * 70) return true;
-  }
-  return false;
-}
-
+/** The live minimap: roads, parks, mission marker, cars, player arrow. */
 export function drawMinimap(ctx, G) {
   const size = 190;
   const x = W - size - 16;
@@ -174,7 +215,7 @@ export function drawMinimap(ctx, G) {
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
   ctx.lineWidth = 2;
   ctx.strokeRect(x - 1, y - 1, size + 2, h + 2);
-  // Mission marker.
+  // Mission marker (pulsing gold dot).
   const t = missionTarget(G);
   if (t && G.mission.started) {
     const pulse = 1 + Math.sin(G.time * 5) * 0.25;
@@ -185,7 +226,7 @@ export function drawMinimap(ctx, G) {
     ctx.strokeStyle = '#7a5c00';
     ctx.stroke();
   }
-  // Police (red) and traffic (white) dots.
+  // Traffic (white) and police (red) dots.
   ctx.fillStyle = '#fff';
   for (const car of G.trafficCars) ctx.fillRect(x + car.x * sx - 1, y + car.y * sy - 1, 2.5, 2.5);
   ctx.fillStyle = '#ff4040';
@@ -194,7 +235,7 @@ export function drawMinimap(ctx, G) {
     ctx.arc(x + car.x * sx, y + car.y * sy, 3.5, 0, Math.PI * 2);
     ctx.fill();
   }
-  // Player arrow (rotates with facing / driving direction).
+  // Player arrow, rotated to the facing / driving direction.
   const px = x + G.player.x * sx;
   const py = y + G.player.y * sy;
   ctx.save();
@@ -210,7 +251,6 @@ export function drawMinimap(ctx, G) {
   ctx.strokeStyle = '#222';
   ctx.stroke();
   ctx.restore();
-  // North + label.
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 11px sans-serif';
   ctx.fillText('SOLMAR CITY', x, y + h + 14);
@@ -219,13 +259,47 @@ export function drawMinimap(ctx, G) {
 
 // ---- full screens -----------------------------------------------------
 
+/** A sunset skyline behind the menu screens. */
+function drawBackdrop(ctx) {
+  ctx.save();
+  ctx.fillStyle = '#f2a65a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffcf7a';
+  ctx.beginPath();
+  ctx.arc(W * 0.72, 150, 90, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.fillRect(60, 120, 220, 14);
+  ctx.fillRect(320, 80, 160, 12);
+  // Skyline silhouettes with lit windows.
+  const heights = [180, 260, 210, 320, 240, 290, 170, 350, 230, 280];
+  for (let i = 0; i < heights.length; i++) {
+    const bw = W / heights.length;
+    ctx.fillStyle = i % 2 ? '#2a2438' : '#3a2f4a';
+    ctx.fillRect(i * bw + 8, H - heights[i] - 120, bw - 16, heights[i] + 120);
+    ctx.fillStyle = 'rgba(255,210,95,0.75)';
+    for (let wy = H - heights[i] - 100; wy < H - 140; wy += 26) {
+      for (let wx = i * bw + 18; wx < (i + 1) * bw - 10; wx += 22) {
+        if ((wx + wy) % 3 === 0) ctx.fillRect(wx, wy, 8, 10);
+      }
+    }
+  }
+  ctx.fillStyle = '#1c2438';
+  ctx.fillRect(0, H - 120, W, 120);
+  ctx.fillStyle = '#ffd25f';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('S O L M A R   C I T Y', W / 2, H - 60);
+  ctx.restore();
+}
+
 export function drawStartScreen(ctx, G) {
-  drawBackdrop(ctx, G);
+  drawBackdrop(ctx);
   ctx.save();
   ctx.fillStyle = 'rgba(8,10,18,0.45)';
   ctx.fillRect(0, 0, W, H);
-  // Sun-soaked title.
   ctx.textAlign = 'center';
+  // Sun-soaked title with a neon glow.
   ctx.fillStyle = '#ffd25f';
   ctx.font = 'bold 74px sans-serif';
   ctx.shadowColor = '#ff5fa2';
@@ -240,7 +314,7 @@ export function drawStartScreen(ctx, G) {
   ctx.fillText('Steal cars. Outrun the law. Run five jobs for Marla Voss — and take the bay.', W / 2, 262);
   // Menu card.
   ctx.fillStyle = 'rgba(10,12,20,0.78)';
-  roundRectPath(ctx, W / 2 - 300, 300, 600, 210, 14);
+  panel(ctx, W / 2 - 300, 300, 600, 210, 14);
   ctx.fill();
   ctx.strokeStyle = '#ffd25f';
   ctx.lineWidth = 2;
@@ -318,65 +392,4 @@ export function drawEndScreen(ctx, G, kind) {
   ctx.font = 'bold 18px sans-serif';
   ctx.fillText('Press ENTER to keep playing in free roam', W / 2, 460);
   ctx.restore();
-}
-
-// A dimmed view of the city behind menu screens.
-function drawBackdrop(ctx, G) {
-  ctx.save();
-  ctx.fillStyle = '#f2a65a';
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#ffcf7a';
-  ctx.beginPath();
-  ctx.arc(W * 0.72, 150, 90, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
-  ctx.fillRect(60, 120, 220, 14);
-  ctx.fillRect(320, 80, 160, 12);
-  // Skyline silhouettes.
-  const heights = [180, 260, 210, 320, 240, 290, 170, 350, 230, 280];
-  for (let i = 0; i < heights.length; i++) {
-    const bw = W / heights.length;
-    ctx.fillStyle = i % 2 ? '#2a2438' : '#3a2f4a';
-    ctx.fillRect(i * bw + 8, H - heights[i] - 120, bw - 16, heights[i] + 120);
-    ctx.fillStyle = 'rgba(255,210,95,0.75)';
-    for (let wy = H - heights[i] - 100; wy < H - 140; wy += 26) {
-      for (let wx = i * bw + 18; wx < (i + 1) * bw - 10; wx += 22) {
-        if ((wx + wy) % 3 === 0) ctx.fillRect(wx, wy, 8, 10);
-      }
-    }
-  }
-  ctx.fillStyle = '#1c2438';
-  ctx.fillRect(0, H - 120, W, 120);
-  ctx.fillStyle = '#ffd25f';
-  ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('S O L M A R   C I T Y', W / 2, H - 60);
-  ctx.restore();
-}
-
-function roundRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-function wrapText(ctx, text, x, y, maxW, lh) {
-  const words = text.split(' ');
-  let line = '';
-  let cy = y;
-  for (const word of words) {
-    const test = line ? line + ' ' + word : word;
-    if (ctx.measureText(test).width > maxW && line) {
-      ctx.fillText(line, x, cy);
-      line = word;
-      cy += lh;
-    } else {
-      line = test;
-    }
-  }
-  if (line) ctx.fillText(line, x, cy);
 }

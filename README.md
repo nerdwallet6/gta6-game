@@ -6,8 +6,8 @@
 
 Entry for the [make.fun `gta6-01` bounty](https://make.fun/bounty/gta6-01):
 build the most complete, highest-quality open-world crime game you can, in
-the spirit of GTA 6. A complete open world, playable in desktop Chrome from
-static files, with keyboard and mouse and no network request.
+the spirit of GTA 6. A complete open world, playable in desktop Chrome
+from static files, with keyboard and mouse and no network request.
 
 **Play it:** serve `game/` with any static file server and open
 `game/index.html` — for example `node serve.ts`, then

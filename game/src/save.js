@@ -1,16 +1,17 @@
 // save.js — localStorage persistence for Vice City Nights.
 // The save holds progression only (money, mission, position, health).
-// It never holds code, and loading a corrupt save just starts fresh.
+// It never holds code, and a corrupt or missing save just starts fresh.
 const SAVE_KEY = 'vice-city-nights-save-v1';
 
+/** Write the current progression to localStorage. Returns true on success. */
 export function saveGame(G) {
   try {
     const data = {
       version: 1,
       savedAt: Date.now(),
       money: Math.floor(G.money),
-      health: Math.round(G.health),
-      missionIndex: G.missionIndex,
+      health: Math.round(G.player.health),
+      missionIndex: G.mission.index,
       missionsDone: G.missionsDone,
       carsStolen: G.stats.carsStolen,
       arrests: G.stats.arrests,
@@ -26,6 +27,7 @@ export function saveGame(G) {
   }
 }
 
+/** Read the save, or null when there is none / it is corrupt / old. */
 export function loadGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
@@ -38,6 +40,7 @@ export function loadGame() {
   }
 }
 
+/** Delete the save, ignoring storage errors. */
 export function clearSave() {
   try {
     localStorage.removeItem(SAVE_KEY);
@@ -46,6 +49,7 @@ export function clearSave() {
   }
 }
 
+/** True when a loadable save exists. */
 export function hasSave() {
   return loadGame() !== null;
 }

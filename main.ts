@@ -1,20 +1,24 @@
 // main.ts — Vice City Nights, the make.fun gta6-01 entry program.
 //
 // Copies game/ and screenshots/ from this repository into the output
-// directory (MAKEFUN_OUTPUT_DIR, or /output when that is unset) and writes
-// /output/dossier.json with buildDossier from vendor/makefun-game.ts.
+// directory (MAKEFUN_OUTPUT_DIR, or /output when that is unset) and
+// writes /output/dossier.json with buildDossier from the kit's library
+// at vendor/makefun-game.ts.
 //
-// Node 22 standard library only, no build step, no network. The copy is
-// deterministic: entries are walked in sorted order, file contents are
-// copied byte for byte, and nothing about the run (time, paths, order of
-// the filesystem) leaks into the output, so two runs write identical bytes.
+// Node 22 standard library only: no build step, no network, no extra
+// dependencies. The copy is deterministic — entries are walked in sorted
+// order, files are copied byte for byte, and nothing about the run
+// (clock, paths, filesystem order) leaks into the output — so two runs
+// write identical bytes.
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const REPO_ROOT = resolve(import.meta.dirname);
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)));
 const OUT_DIR = resolve(process.env.MAKEFUN_OUTPUT_DIR || '/output');
 
+// The caps the bounty sets for the dossier (see RULES.txt in the kit).
 const DOSSIER_CAPS = {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
@@ -23,9 +27,11 @@ const DOSSIER_CAPS = {
   game_path_max_bytes: 1000,
 } as const;
 
+/**
+ * Every entry under dir, as relative paths, sorted by code unit, so the
+ * walk order never depends on the filesystem. Directories end with '/'.
+ */
 function listTree(dir: string): string[] {
-  // Every entry under dir, relative paths, sorted by code unit so the
-  // walk order never depends on the filesystem.
   const found: string[] = [];
   const walk = (d: string, prefix: string): void => {
     for (const name of readdirSync(d).sort()) {

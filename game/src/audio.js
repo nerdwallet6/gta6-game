@@ -1,5 +1,6 @@
-// audio.js — synthesized WebAudio sound: no audio files, everything is
-// oscillators and filtered noise, built fresh on first user gesture.
+// audio.js — synthesized WebAudio sound for Vice City Nights.
+// No audio files: every sound is an oscillator or filtered noise built
+// on first user gesture, so the game plays offline with zero assets.
 export function createAudio() {
   const A = {
     ctx: null,
@@ -14,6 +15,7 @@ export function createAudio() {
     muted: false,
   };
 
+  /** Build the AudioContext and the two looping voices (engine, siren). */
   A.ensure = function ensure() {
     if (A.ctx) {
       if (A.ctx.state === 'suspended') A.ctx.resume();
@@ -26,7 +28,7 @@ export function createAudio() {
       A.master = A.ctx.createGain();
       A.master.gain.value = 0.5;
       A.master.connect(A.ctx.destination);
-      // Engine hum: a low sawtooth whose pitch follows speed.
+      // Engine hum: low sawtooth through a low-pass, pitch follows speed.
       A.engineOsc = A.ctx.createOscillator();
       A.engineOsc.type = 'sawtooth';
       A.engineOsc.frequency.value = 50;
@@ -39,7 +41,7 @@ export function createAudio() {
       lp.connect(A.engineGain);
       A.engineGain.connect(A.master);
       A.engineOsc.start();
-      // Police siren: two-tone triangle, silent until wanted.
+      // Police siren: two-tone triangle, silent until there is heat.
       A.sirenOsc = A.ctx.createOscillator();
       A.sirenOsc.type = 'triangle';
       A.sirenOsc.frequency.value = 700;
@@ -54,6 +56,7 @@ export function createAudio() {
     }
   };
 
+  // A short pitched blip, optionally sliding down.
   function tone(freq, dur, type, vol, slideTo) {
     if (!A.ctx || A.muted) return;
     const t0 = A.ctx.currentTime;
@@ -70,6 +73,7 @@ export function createAudio() {
     o.stop(t0 + dur + 0.02);
   }
 
+  // A burst of filtered noise that decays — gunshots, punches, doors.
   function noise(dur, vol, filterFreq) {
     if (!A.ctx || A.muted) return;
     const t0 = A.ctx.currentTime;
@@ -90,26 +94,58 @@ export function createAudio() {
     src.start(t0);
   }
 
+  /** Play one named effect. Unknown names are ignored silently. */
   A.sfx = function sfx(name) {
     if (!A.ensure() || A.muted) return;
     switch (name) {
-      case 'shot': noise(0.12, 0.35, 2600); tone(180, 0.08, 'square', 0.12, 60); break;
-      case 'punch': noise(0.08, 0.25, 500); break;
-      case 'hit': tone(220, 0.1, 'sawtooth', 0.14, 90); break;
-      case 'pickup': tone(660, 0.09, 'sine', 0.18); setTimeout(() => tone(990, 0.14, 'sine', 0.18), 90); break;
-      case 'cash': tone(880, 0.08, 'sine', 0.16); setTimeout(() => tone(1174, 0.08, 'sine', 0.16), 80); setTimeout(() => tone(1568, 0.16, 'sine', 0.16), 160); break;
-      case 'mission': [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'triangle', 0.18), i * 110)); break;
-      case 'fail': [400, 320, 240].forEach((f, i) => setTimeout(() => tone(f, 0.22, 'sawtooth', 0.12), i * 140)); break;
-      case 'car': tone(140, 0.25, 'sawtooth', 0.14, 320); noise(0.18, 0.12, 900); break;
-      case 'door': noise(0.1, 0.2, 700); break;
-      case 'reload': tone(500, 0.05, 'square', 0.1); setTimeout(() => tone(700, 0.05, 'square', 0.1), 120); break;
-      case 'siren-hit': tone(980, 0.12, 'square', 0.12, 500); break;
-      case 'busted': [330, 262, 196, 131].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'triangle', 0.16), i * 180)); break;
-      default: break;
+      case 'shot':
+        noise(0.12, 0.35, 2600);
+        tone(180, 0.08, 'square', 0.12, 60);
+        break;
+      case 'punch':
+        noise(0.08, 0.25, 500);
+        break;
+      case 'hit':
+        tone(220, 0.1, 'sawtooth', 0.14, 90);
+        break;
+      case 'pickup':
+        tone(660, 0.09, 'sine', 0.18);
+        setTimeout(() => tone(990, 0.14, 'sine', 0.18), 90);
+        break;
+      case 'cash':
+        tone(880, 0.08, 'sine', 0.16);
+        setTimeout(() => tone(1174, 0.08, 'sine', 0.16), 80);
+        setTimeout(() => tone(1568, 0.16, 'sine', 0.16), 160);
+        break;
+      case 'mission':
+        [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'triangle', 0.18), i * 110));
+        break;
+      case 'fail':
+        [400, 320, 240].forEach((f, i) => setTimeout(() => tone(f, 0.22, 'sawtooth', 0.12), i * 140));
+        break;
+      case 'car':
+        tone(140, 0.25, 'sawtooth', 0.14, 320);
+        noise(0.18, 0.12, 900);
+        break;
+      case 'door':
+        noise(0.1, 0.2, 700);
+        break;
+      case 'reload':
+        tone(500, 0.05, 'square', 0.1);
+        setTimeout(() => tone(700, 0.05, 'square', 0.1), 120);
+        break;
+      case 'busted':
+        [330, 262, 196, 131].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'triangle', 0.16), i * 180));
+        break;
+      default:
+        break;
     }
   };
 
-  // Per-frame audio: engine pitch from speed, siren wail while wanted.
+  /**
+   * Per-frame audio: engine pitch from the player's speed, the siren
+   * wailing while wanted, and a quiet sunset-drive arpeggio loop.
+   */
   A.update = function update(G, dt) {
     if (!A.ctx || A.muted) return;
     const speed = G.player.car ? Math.abs(G.player.car.speed) : 0;
@@ -126,7 +162,7 @@ export function createAudio() {
         A.sirenOsc.frequency.setTargetAtTime(wail, A.ctx.currentTime, 0.05);
       }
     }
-    // Simple sunset-drive music: a looping minor-key arpeggio, quiet.
+    // Sunset-drive music: a looping minor-key arpeggio, kept quiet.
     A.musicTimer -= dt;
     if (A.musicTimer <= 0 && G.screen === 'play') {
       A.musicTimer = 0.24;
@@ -138,6 +174,7 @@ export function createAudio() {
     }
   };
 
+  /** Flip mute; returns the new muted state. */
   A.toggleMute = function toggleMute() {
     A.muted = !A.muted;
     if (A.master) A.master.gain.value = A.muted ? 0 : 0.5;

@@ -1,13 +1,13 @@
 // missions.js — the story: a 5-mission chain for Rae Solano, a driver
-// new to Solmar City who falls in with fixer Marla Voss. Each mission is
-// a list of objectives (go to, pick up, deliver, survive, eliminate) with
-// dialogue, a map marker and a cash reward.
+// new to Solmar City who falls in with fixer Marla Voss. Each mission
+// is a list of objectives (go to, pick up, deliver, survive, eliminate)
+// with dialogue, a map marker and a cash reward.
 import { dist, fmtMoney } from './util.js';
 import { spawnRivals } from './combat.js';
 import { addWanted } from './player.js';
 import { clearWanted } from './police.js';
 
-// Mission target spots, chosen on the road grid (x, y in world pixels).
+// Mission target spots, chosen on the road grid (world pixels).
 export const SPOTS = {
   plaza: { x: 560, y: 1180, label: 'Solmar Plaza' },
   marina: { x: 1520, y: 980, label: 'Marina Docks' },
@@ -127,6 +127,7 @@ export function missionTarget(G) {
   return SPOTS[step.spot];
 }
 
+/** Open a mission: show its briefing dialogue and mark it started. */
 export function startMission(G, index) {
   const m = MISSIONS[index];
   if (!m) return;
@@ -153,15 +154,16 @@ export function advanceDialogue(G) {
   if (d.i >= d.lines.length) G.mission.dialogue = null;
 }
 
-// Called when the player presses E: handles mission interactions
-// (pickup / deliver) as well as entering cars (handled by player.js).
+/**
+ * Called when the player presses E: handles mission interactions
+ * (pickup / deliver). Entering cars is handled by player.js.
+ */
 export function missionInteract(G) {
   const step = currentStep(G);
   if (!step || !G.mission.started) return false;
   const target = missionTarget(G);
   if (!target) return false;
-  const d = dist(G.player.x, G.player.y, target.x, target.y);
-  if (d > 90) return false;
+  if (dist(G.player.x, G.player.y, target.x, target.y) > 90) return false;
   if (step.type === 'collect') {
     G.mission.packageHeld = true;
     G.audio.sfx('pickup');
@@ -180,6 +182,7 @@ export function missionInteract(G) {
   return false;
 }
 
+/** Move to the next objective, or finish the mission with its reward. */
 function advanceStep(G) {
   const m = currentMission(G);
   if (!m) return;
@@ -207,7 +210,9 @@ function completeMission(G, m) {
   showDialogue(G, [
     m.title + ' complete.',
     'Marla: ' + fmtMoney(m.reward) + ' is yours. ' +
-      (G.mission.index + 1 < MISSIONS.length ? 'One more job when you are ready.' : 'The bay is yours, Rae.'),
+      (G.mission.index + 1 < MISSIONS.length
+        ? 'One more job when you are ready.'
+        : 'The bay is yours, Rae.'),
   ]);
   if (G.mission.index + 1 < MISSIONS.length) {
     G.mission.index++;
@@ -220,7 +225,9 @@ function completeMission(G, m) {
   }
 }
 
+/** Per-frame mission logic: watch the current step's condition. */
 export function updateMissions(G, dt) {
+  void dt;
   const M = G.mission;
   if (M.done || !M.started) return;
   const step = currentStep(G);
@@ -239,7 +246,7 @@ export function updateMissions(G, dt) {
     }
     case 'collect':
     case 'deliver': {
-      // Waits for missionInteract (E). Show a hint when close.
+      // Waits for missionInteract (E). The HUD hints when close.
       break;
     }
     case 'eliminate': {
@@ -251,9 +258,8 @@ export function updateMissions(G, dt) {
         G.noticeT = 3;
       }
       if (M.rivalsSpawned) {
-        const need = step.count;
         const killed = G.stats.kills - M.killsAtStepStart;
-        if (killed >= need && G.combat.enemies.length === 0) advanceStep(G);
+        if (killed >= step.count && G.combat.enemies.length === 0) advanceStep(G);
       }
       break;
     }
@@ -274,8 +280,11 @@ export function updateMissions(G, dt) {
   }
 }
 
-// Draw the pulsing objective marker in the world + a screen-edge arrow.
-export function drawMissionMarker(ctx, G, cam) {
+/**
+ * Draw the pulsing objective marker in the world. The screen-edge
+ * arrow and minimap dot live in hud.js.
+ */
+export function drawMissionMarker(ctx, G) {
   const step = currentStep(G);
   if (!step || !G.mission.started || G.screen !== 'play') return;
   const t = missionTarget(G);
@@ -299,5 +308,4 @@ export function drawMissionMarker(ctx, G, cam) {
   ctx.closePath();
   ctx.fill();
   ctx.restore();
-  void cam;
 }

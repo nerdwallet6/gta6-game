@@ -1,5 +1,6 @@
-// player.js — the player character: on-foot movement, entering and
-// leaving cars, health, sprint and the "wasted / busted" states.
+// player.js — Rae Solano on foot: movement, sprint, entering and
+// leaving cars, health, and the wanted-level helper shared by police
+// and combat. Health lives on the player object itself.
 import { clamp, dist } from './util.js';
 import { resolveBuildingCollision, inWater } from './city.js';
 
@@ -25,6 +26,7 @@ export function createPlayer(x, y) {
   };
 }
 
+/** Hurt the player; at zero health the run ends on the WASTED screen. */
 export function damagePlayer(G, amount, source) {
   if (G.screen !== 'play' || G.player.health <= 0) return;
   G.player.health = Math.max(0, G.player.health - amount);
@@ -34,9 +36,13 @@ export function damagePlayer(G, amount, source) {
     G.audio.sfx('fail');
     G.stats.deaths++;
   }
+  void source;
 }
 
-// On-foot update: WASD / arrows, Shift sprint, building + water collision.
+/**
+ * On-foot update: WASD / arrows, Shift sprint, building and water
+ * collision, cooldown timers, and slow health regen while calm.
+ */
 export function updatePlayerOnFoot(G, dt) {
   const p = G.player;
   const k = G.keys;
@@ -51,10 +57,8 @@ export function updatePlayerOnFoot(G, dt) {
   p.moving = mx !== 0 || my !== 0;
   if (p.moving) {
     const len = Math.hypot(mx, my);
-    const nx = (mx / len) * speed * dt;
-    const ny = (my / len) * speed * dt;
-    p.x += nx;
-    p.y += ny;
+    p.x += (mx / len) * speed * dt;
+    p.y += (my / len) * speed * dt;
     p.angle = Math.atan2(my, mx);
     p.walkPhase += dt * (p.sprinting ? 13 : 9);
   }
@@ -68,14 +72,15 @@ export function updatePlayerOnFoot(G, dt) {
   if (p.punchCooldown > 0) p.punchCooldown -= dt;
   if (p.shootCooldown > 0) p.shootCooldown -= dt;
   if (p.hurtFlash > 0) p.hurtFlash -= dt;
-  // Slow health regen when no cop is close and the player is calm.
   if (G.wanted === 0 && p.health > 0 && p.health < p.maxHealth) {
     p.health = Math.min(p.maxHealth, p.health + 1.6 * dt);
   }
 }
 
-// Enter the nearest car within reach (E). Stealing a car someone else
-// drives raises the wanted level — the city notices.
+/**
+ * Enter the nearest stealable car within reach (E). Taking a car that
+ * someone is driving raises the wanted level and the driver runs off.
+ */
 export function tryEnterCar(G) {
   const p = G.player;
   if (!p.onFoot) return false;
@@ -104,13 +109,13 @@ export function tryEnterCar(G) {
   return true;
 }
 
+/** Step out of the car to its left side (E). */
 export function exitCar(G) {
   const p = G.player;
   if (p.onFoot || !p.car) return false;
   const car = p.car;
   car.driver = 'parked';
   car.speed = 0;
-  // Step out to the car's left side, clear of buildings.
   const sx = car.x + Math.cos(car.angle + Math.PI / 2) * 34;
   const sy = car.y + Math.sin(car.angle + Math.PI / 2) * 34;
   p.x = clamp(sx, 16, G.city.W - 16);
@@ -122,17 +127,18 @@ export function exitCar(G) {
   return true;
 }
 
+/** A robbed driver runs off on foot, arms waving, panicked. */
 function spawnFleeingDriver(G, car) {
-  // The robbed driver runs off on foot, arms waving.
   G.peds.push({
     x: car.x + 30, y: car.y + 10,
     angle: Math.random() * Math.PI * 2,
     speed: 190, flee: true, fleeX: car.x + 300, fleeY: car.y - 200,
     color: '#e05a5a', panic: 6, wanderT: 0, target: null,
+    walkPhase: 0, shirt: '#d04040',
   });
 }
 
-// Shared by police.js: raise wanted, cap at 5, show the reason.
+/** Raise the wanted level, capped at 5, and show the reason. */
 export function addWanted(G, n, reason) {
   const before = G.wanted;
   G.wanted = clamp(G.wanted + n, 0, 5);
@@ -142,23 +148,23 @@ export function addWanted(G, n, reason) {
   }
 }
 
+/** Top-down drawing of Rae: shadow, stepping legs, shirt, head, cap. */
 export function drawPlayer(ctx, G) {
   const p = G.player;
   if (!p.onFoot) return;
   const bob = p.moving ? Math.sin(p.walkPhase) * 3 : 0;
   ctx.save();
   ctx.translate(p.x, p.y);
-  // Shadow.
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
   ctx.ellipse(0, 8, 12, 6, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.rotate(p.angle + Math.PI / 2);
-  // Legs (two feet stepping with the walk cycle).
+  // Legs stepping with the walk cycle.
   ctx.fillStyle = '#2c2c34';
   ctx.fillRect(-8, -2 + bob, 6, 12);
   ctx.fillRect(2, -2 - bob, 6, 12);
-  // Body: shirt, jacket shoulders, head.
+  // Shirt, jacket shoulders, head.
   ctx.fillStyle = p.shirt;
   ctx.beginPath();
   ctx.arc(0, 0, 11, 0, Math.PI * 2);
@@ -170,14 +176,14 @@ export function drawPlayer(ctx, G) {
   ctx.beginPath();
   ctx.arc(0, -1, 7.5, 0, Math.PI * 2);
   ctx.fill();
-  // Hair + cap.
+  // Hair and red cap.
   ctx.fillStyle = '#241a12';
   ctx.beginPath();
   ctx.arc(0, -3, 7, Math.PI, 0);
   ctx.fill();
   ctx.fillStyle = '#e84a4a';
   ctx.fillRect(-7, -6, 14, 4);
-  // Fists forward when punching, gun when armed.
+  // Fists forward while punching, otherwise a gun when armed.
   if (G.combat.punchAnim > 0) {
     ctx.fillStyle = p.color;
     ctx.beginPath();

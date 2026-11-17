@@ -1,7 +1,7 @@
 // shots.js — deterministic staged scenes for screenshots, driven by
-// ?shot=<name>&seed=1. Each scene sets up the world, the player, traffic,
-// police and a mission state so the render is identical every run.
-// Scenes: start, city, chase, mission.
+// ?shot=<name>&seed=1. Each scene sets up the world, the player,
+// traffic, police and a mission state so the render is identical on
+// every run. Scenes: start, city, chase, mission.
 import { makeRng } from './util.js';
 import { createCar } from './vehicles.js';
 import { spawnRivals } from './combat.js';
@@ -61,13 +61,13 @@ export function applyShot(G, name, seed) {
     G.missionsDone = 2;
     addWanted(G, 3, 'police chase');
     G.police.heatT = 0;
-    // Three cruisers in pursuit, trailing the getaway from the west and
-    // the north — close enough to read as a chase, far enough out that
-    // they have not yet pinned the car when the shot is taken.
+    // Three cruisers in pursuit — close enough to stay inside the
+    // camera frame: two trailing the getaway on the same road, one
+    // cutting down the avenue from the north.
     const spots = [
-      { x: 420, y: 980, a: 0 },
-      { x: 300, y: 1060, a: 0 },
-      { x: 1120, y: 300, a: Math.PI / 2 },
+      { x: 820, y: 980, a: 0 },
+      { x: 760, y: 1044, a: 0 },
+      { x: 1120, y: 660, a: Math.PI / 2 },
     ];
     for (const s of spots) {
       const pc = createCar(s.x, s.y, { police: true, driver: 'police', color: '#101418' });
@@ -123,9 +123,11 @@ export function applyShot(G, name, seed) {
   G.shotReady = true;
 }
 
+/**
+ * Nudge a few traffic cars and pedestrians close to the camera focus
+ * so the scene reads as a living street.
+ */
 function positionTrafficNear(G, rng, cx, cy, count) {
-  // Nudge a few traffic cars and pedestrians close to the camera focus
-  // so the scene reads as a living street.
   let placed = 0;
   for (const car of G.trafficCars) {
     if (placed >= count) break;

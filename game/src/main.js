@@ -1,26 +1,27 @@
 // main.js — Vice City Nights: boot, game loop, camera, input and screens.
-// This module owns the shared game state G and calls each system in turn:
-// city, player, vehicles, traffic, police, missions, combat, hud, audio,
-// save and the staged screenshot scenes (shots.js).
-import { clamp, lerp, makeRng } from './util.js';
-import { createCity, drawCity, roadPoint } from './city.js';
+// This module owns the shared game state G and calls each system in
+// turn: city, player, vehicles, traffic, police, missions, combat, hud,
+// audio, save and the staged screenshot scenes (shots.js).
+import { clamp, lerp } from './util.js';
+import { createCity, drawCity } from './city.js';
 import { createPlayer, updatePlayerOnFoot, tryEnterCar, exitCar, drawPlayer } from './player.js';
 import { createCar, updateCarPhysics, drawCar } from './vehicles.js';
 import { createTraffic, createParkedCars, createPedestrians, updateTraffic, updatePedestrians, drawPedestrians } from './traffic.js';
 import { createPoliceState, updatePolice } from './police.js';
-import { createMissionState, startMission, updateMissions, missionInteract, advanceDialogue, drawMissionMarker, currentMission } from './missions.js';
+import { createMissionState, startMission, updateMissions, missionInteract, advanceDialogue, drawMissionMarker } from './missions.js';
 import { createCombat, updateCombat, playerShoot, playerPunch, reloadWeapon, drawCombat } from './combat.js';
-import { drawHUD, drawMinimap, drawStartScreen, drawPauseScreen, drawEndScreen } from './hud.js';
+import { drawHUD, drawStartScreen, drawPauseScreen, drawEndScreen } from './hud.js';
 import { createAudio } from './audio.js';
-import { saveGame, loadGame, clearSave } from './save.js';
+import { saveGame, loadGame } from './save.js';
 import { applyShot } from './shots.js';
 
 const VIEW_W = 1280;
 const VIEW_H = 720;
 
+/** Build a fresh game state for the given seed. */
 function createGame(seed) {
   const city = createCity(seed);
-  const G = {
+  return {
     seed,
     time: 0,
     screen: 'start', // start | play | pause | wasted | busted | complete
@@ -35,10 +36,9 @@ function createGame(seed) {
     particles: [],
     audio: createAudio(),
     keys: {},
-    mouse: { x: VIEW_W / 2, y: VIEW_H / 2, down: false, clicked: false },
+    mouse: { x: VIEW_W / 2, y: VIEW_H / 2, down: false },
     cam: { x: city.spawn.x, y: city.spawn.y, view: { x: 0, y: 0, w: VIEW_W, h: VIEW_H } },
     money: 120,
-    health: 100,
     wanted: 0,
     wantedFlash: 0,
     lastWantedReason: '',
@@ -53,46 +53,35 @@ function createGame(seed) {
     shotReady: false,
     stats: { carsStolen: 0, kills: 0, deaths: 0, arrests: 0 },
     saveT: 0,
-    paused: false,
   };
-  // Link health onto the player object for the HUD's single read.
-  Object.defineProperty(G.player, 'health', {
-    get() { return G.health; },
-    set(v) { G.health = v; },
-  });
-  G.player.maxHealth = 100;
-  return G;
 }
 
+/** Fill the world: parked cars, traffic, pedestrians, a couple of cars
+ *  parked right by the spawn so the first job is easy. */
 function populateWorld(G) {
-  const rng = makeRng(G.seed + 55);
   G.cars = createParkedCars(G, 14);
   G.trafficCars = createTraffic(G, 16);
   G.peds = createPedestrians(G, 42);
-  // A couple of cars parked right by the spawn so the first job is easy.
   const near1 = createCar(G.city.spawn.x + 120, G.city.spawn.y + 30, { driver: 'parked', color: '#3f7fd0' });
   near1.angle = Math.PI / 2;
   G.cars.push(near1);
   const near2 = createCar(G.city.spawn.x - 60, G.city.spawn.y + 160, { driver: 'parked', color: '#e8b93a' });
   near2.angle = 0;
   G.cars.push(near2);
-  void rng;
-  void roadPoint;
 }
 
 // ---- input ------------------------------------------------------------
 
 function bindInput(G, canvas) {
-  const key = (e) => e.code;
   window.addEventListener('keydown', (e) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.repeat) return;
-    G.keys[key(e)] = true;
+    G.keys[e.code] = true;
     G.audio.ensure();
     handleKeyPress(G, e.code);
   });
   window.addEventListener('keyup', (e) => {
-    G.keys[key(e)] = false;
+    G.keys[e.code] = false;
   });
   canvas.addEventListener('mousemove', (e) => {
     const r = canvas.getBoundingClientRect();
@@ -152,7 +141,6 @@ function handleKeyPress(G, code) {
   }
   if (code === 'KeyR') reloadWeapon(G);
   if (code === 'KeyF') playerPunch(G);
-  if (code === 'KeyS' && G.keys['ControlLeft']) saveGame(G);
 }
 
 function handleClick(G) {
@@ -171,6 +159,7 @@ function handleClick(G) {
   }
 }
 
+/** Start a new run from the title screen; open the first mission. */
 function startPlaying(G) {
   G.audio.ensure();
   G.screen = 'play';
@@ -180,11 +169,12 @@ function startPlaying(G) {
   G.audio.sfx('mission');
 }
 
+/** Continue from a saved game (C on the title screen). */
 function continueSave(G) {
   const data = loadGame();
   if (!data) return;
   G.money = data.money;
-  G.health = data.health;
+  G.player.health = data.health;
   G.mission.index = Math.min(data.missionIndex, 4);
   G.missionsDone = data.missionsDone;
   G.stats.carsStolen = data.carsStolen || 0;
@@ -198,12 +188,11 @@ function continueSave(G) {
   G.noticeT = 4;
 }
 
+/** After wasted / busted / complete, keep playing in free roam. */
 function resumeFreeRoam(G) {
-  // After wasted / busted / complete, keep playing the open world.
   if (G.screen === 'busted') {
     G.money = Math.max(0, G.money - 200);
   }
-  G.health = 100;
   G.player.health = 100;
   G.wanted = 0;
   G.police.cars = [];
@@ -294,14 +283,14 @@ function render(G, ctx) {
   ctx.save();
   ctx.translate(-G.cam.view.x, -G.cam.view.y);
   drawCity(ctx, G.city, G.cam);
-  drawMissionMarker(ctx, G, G.cam);
+  drawMissionMarker(ctx, G);
   // Parked / stealable cars, then traffic, then police.
-  for (const car of G.cars) drawCar(ctx, car, G.cam);
-  for (const car of G.trafficCars) drawCar(ctx, car, G.cam);
-  for (const car of G.police.cars) drawCar(ctx, car, G.cam);
+  for (const car of G.cars) drawCar(ctx, car);
+  for (const car of G.trafficCars) drawCar(ctx, car);
+  for (const car of G.police.cars) drawCar(ctx, car);
   drawPedestrians(ctx, G);
   drawCombat(ctx, G);
-  if (G.player.car) drawCar(ctx, G.player.car, G.cam);
+  if (G.player.car) drawCar(ctx, G.player.car);
   drawPlayer(ctx, G);
   ctx.restore();
 
@@ -349,7 +338,7 @@ function boot() {
     last = now;
     if (G.screen === 'play' && !G.mission.dialogue) update(G, dt);
     else if (G.screen === 'play') {
-      // Dialogue open: world idles, audio keeps breathing.
+      // Dialogue open: the world idles, audio keeps breathing.
       G.audio.update(G, dt);
     }
     render(G, ctx);

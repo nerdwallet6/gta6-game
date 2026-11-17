@@ -1,6 +1,6 @@
-// combat.js — shooting, punching, rival gang members, bullets and
-// particles. All combat is original: a simple pistol, fists, and rivals
-// who shoot back.
+// combat.js — shooting, punching, rival gang members (the Vipers) who
+// shoot back, bullets and particles. A simple pistol, fists, and rivals
+// with health bars — all original, no commercial-game assets.
 import { clamp, dist, angleTo } from './util.js';
 import { resolveBuildingCollision } from './city.js';
 import { addWanted, damagePlayer } from './player.js';
@@ -16,6 +16,7 @@ export function createCombat() {
   };
 }
 
+/** Spawn rival shooters around a point, with the given health each. */
 export function spawnRivals(G, x, y, count, opts) {
   const o = opts || {};
   for (let i = 0; i < count; i++) {
@@ -34,6 +35,7 @@ export function spawnRivals(G, x, y, count, opts) {
   }
 }
 
+/** Fire the pistol at a world point (mouse aim, on foot only). */
 export function playerShoot(G, tx, ty) {
   const p = G.player;
   if (!p.onFoot) return;
@@ -61,7 +63,7 @@ export function playerShoot(G, tx, ty) {
   G.combat.lastShot = { x: p.x, y: p.y, t: G.time };
   G.combat.muzzleT = 0.07;
   G.audio.sfx('shot');
-  addWanted(G, 0, ''); // firing a gun is noticed below, once per shot
+  // Firing a gun in the city is noticed: at least one star of heat.
   if (G.wanted < 1) {
     G.wanted = 1;
     G.wantedFlash = 1.2;
@@ -71,13 +73,13 @@ export function playerShoot(G, tx, ty) {
   spawnMuzzle(G, p.x + Math.cos(a) * 22, p.y + Math.sin(a) * 22);
 }
 
+/** Swing a fist at whatever is right in front of the player. */
 export function playerPunch(G) {
   const p = G.player;
   if (!p.onFoot || p.punchCooldown > 0) return;
   p.punchCooldown = 0.45;
   G.combat.punchAnim = 0.25;
   G.audio.sfx('punch');
-  // Hit anything in a short arc in front of the player.
   const reach = 46;
   const hx = p.x + Math.cos(p.angle) * reach;
   const hy = p.y + Math.sin(p.angle) * reach;
@@ -103,6 +105,7 @@ export function playerPunch(G) {
   if (hitSomething) G.audio.sfx('hit');
 }
 
+/** Refill the pistol's magazine. */
 export function reloadWeapon(G) {
   if (G.ammo >= G.ammoMax) return;
   G.ammo = G.ammoMax;
@@ -111,6 +114,7 @@ export function reloadWeapon(G) {
   G.noticeT = 1.2;
 }
 
+/** Damage a rival; a kill pays $45 and draws the law's attention. */
 function damageEnemy(G, e, dmg) {
   e.health -= dmg;
   spawnBlood(G, e.x, e.y);
@@ -126,12 +130,12 @@ function damageEnemy(G, e, dmg) {
   }
 }
 
+/** Bullets fly and hit walls, cars, rivals or the player; rivals act. */
 export function updateCombat(G, dt) {
   const C = G.combat;
   if (C.punchAnim > 0) C.punchAnim -= dt;
   if (C.muzzleT > 0) C.muzzleT -= dt;
 
-  // Bullets fly, hit buildings, cars, enemies, the player.
   for (const b of C.bullets) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
@@ -168,19 +172,17 @@ export function updateCombat(G, dt) {
         }
       }
     } else {
-      // Enemy bullets can hit the player (on foot or in the car).
-      const px = G.player.x;
-      const py = G.player.y;
-      if (dist(b.x, b.y, px, py) < 18) {
+      // Enemy bullets can hit the player, on foot or in the car.
+      if (dist(b.x, b.y, G.player.x, G.player.y) < 18) {
         b.life = 0;
         damagePlayer(G, b.dmg, 'shot');
       }
     }
   }
   C.bullets = C.bullets.filter((b) => b.life > 0);
-  C.enemies = C.enemies.filter((e) => !e.dead || e.deathT > 0);
+  C.enemies = C.enemies.filter((e) => !e.dead);
 
-  // Rivals: close in, keep a firing distance, shoot at the player.
+  // Rivals: close in to firing range, back off when too near, shoot.
   for (const e of C.enemies) {
     if (e.dead) continue;
     const d = dist(e.x, e.y, G.player.x, G.player.y);
@@ -210,11 +212,10 @@ export function updateCombat(G, dt) {
       C.muzzleT = 0.05;
       G.audio.sfx('shot');
     }
-    // Keep rivals out of buildings.
     resolveBuildingCollision(G.city, e, 13);
   }
 
-  // Particles fade.
+  // Particles fade out (combat sparks and crash sparks alike).
   for (const pt of C.particles) {
     pt.x += pt.vx * dt;
     pt.y += pt.vy * dt;
@@ -254,11 +255,12 @@ function spawnMuzzle(G, x, y) {
   spawnSparks(G, x, y, '#ffe9a8', 5);
 }
 
+/** Draw bullets, particles, rivals (with health bars) and muzzle flash. */
 export function drawCombat(ctx, G) {
   const C = G.combat;
+  ctx.strokeStyle = '#ffe9a8';
+  ctx.lineWidth = 3;
   for (const b of C.bullets) {
-    ctx.strokeStyle = '#ffe9a8';
-    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(b.x - b.vx * 0.02, b.y - b.vy * 0.02);
     ctx.lineTo(b.x, b.y);
@@ -269,7 +271,6 @@ export function drawCombat(ctx, G) {
     ctx.fillStyle = pt.color;
     ctx.fillRect(pt.x - pt.size / 2, pt.y - pt.size / 2, pt.size, pt.size);
   }
-  ctx.globalAlpha = 1;
   for (const pt of G.particles) {
     ctx.globalAlpha = clamp(pt.life / pt.maxLife, 0, 1);
     ctx.fillStyle = pt.color;
@@ -297,6 +298,7 @@ export function drawCombat(ctx, G) {
     ctx.beginPath();
     ctx.arc(0, -1, 6.5, 0, Math.PI * 2);
     ctx.fill();
+    // The rival's gun.
     ctx.fillStyle = '#111';
     ctx.fillRect(-2, -22, 4, 10);
     ctx.restore();
@@ -308,7 +310,7 @@ export function drawCombat(ctx, G) {
       ctx.fillRect(e.x - 15, e.y - 25, 30 * clamp(e.health / 50, 0, 1), 3);
     }
   }
-  // Muzzle flash.
+  // Muzzle flash at the player's gun.
   if (C.muzzleT > 0 && G.player.onFoot) {
     const p = G.player;
     ctx.fillStyle = 'rgba(255,233,168,0.9)';
