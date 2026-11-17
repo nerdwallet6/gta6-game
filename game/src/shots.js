@@ -1,79 +1,147 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// shots.js — deterministic staged scenes for screenshots, driven by
+// ?shot=<name>&seed=1. Each scene sets up the world, the player, traffic,
+// police and a mission state so the render is identical every run.
+// Scenes: start, city, chase, mission.
+import { makeRng } from './util.js';
+import { createCar } from './vehicles.js';
+import { spawnRivals } from './combat.js';
+import { startMission } from './missions.js';
+import { addWanted } from './player.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+export const SHOT_NAMES = ['start', 'city', 'chase', 'mission'];
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
+export function applyShot(G, name, seed) {
+  const rng = makeRng((seed * 31 + name.length * 977) >>> 0);
+  G.shot = name;
+  G.screen = 'play';
+  G.time = 42; // mid-session light, HUD populated
+
+  if (name === 'start') {
+    G.screen = 'start';
+    G.shotReady = true;
+    return;
   }
-  return Infinity;
+
+  if (name === 'city') {
+    // Rae driving a red sportscar down Neon Row, traffic all around.
+    const car = createCar(1520, 620, { driver: 'player', color: '#d84040' });
+    car.type = 'sport';
+    car.angle = Math.PI / 2;
+    car.speed = 210;
+    G.cars.push(car);
+    G.player.car = car;
+    G.player.onFoot = false;
+    G.player.x = car.x;
+    G.player.y = car.y;
+    G.player.angle = car.angle;
+    G.money = 1240;
+    G.mission.started = true;
+    G.mission.index = 0;
+    G.mission.step = 1;
+    G.notice = 'Drive to Solmar Plaza';
+    G.noticeT = 99;
+    positionTrafficNear(G, rng, 1520, 620, 8);
+    G.shotReady = true;
+    return;
+  }
+
+  if (name === 'chase') {
+    // The money shot: wanted 3, three cruisers closing in, mission live.
+    const car = createCar(1120, 980, { driver: 'player', color: '#e8b93a' });
+    car.type = 'sport';
+    car.angle = 0;
+    car.speed = 300;
+    G.cars.push(car);
+    G.player.car = car;
+    G.player.onFoot = false;
+    G.player.x = car.x;
+    G.player.y = car.y;
+    G.player.angle = car.angle;
+    G.money = 2890;
+    G.missionsDone = 2;
+    addWanted(G, 3, 'police chase');
+    G.police.heatT = 0;
+    // Three cruisers in pursuit, trailing the getaway from the west and
+    // the north — close enough to read as a chase, far enough out that
+    // they have not yet pinned the car when the shot is taken.
+    const spots = [
+      { x: 420, y: 980, a: 0 },
+      { x: 300, y: 1060, a: 0 },
+      { x: 1120, y: 300, a: Math.PI / 2 },
+    ];
+    for (const s of spots) {
+      const pc = createCar(s.x, s.y, { police: true, driver: 'police', color: '#101418' });
+      pc.type = 'sedan';
+      pc.angle = s.a;
+      pc.speed = 260;
+      pc.accel = 520;
+      pc.top = 400;
+      G.police.cars.push(pc);
+    }
+    startMission(G, 3);
+    G.mission.step = 2;
+    G.mission.started = true;
+    G.mission.dialogue = null;
+    G.notice = 'Outrun the police to Bayview Arena';
+    G.noticeT = 99;
+    positionTrafficNear(G, rng, 1120, 980, 6);
+    G.shotReady = true;
+    return;
+  }
+
+  if (name === 'mission') {
+    // Mission 3 in progress: Rae on foot at Neon Row, Vipers shooting.
+    G.player.x = 1520;
+    G.player.y = 340;
+    G.player.angle = Math.PI / 2;
+    G.player.onFoot = true;
+    G.player.car = null;
+    G.money = 1750;
+    G.missionsDone = 1;
+    G.ammo = 9;
+    startMission(G, 2);
+    G.mission.step = 1;
+    G.mission.rivalsSpawned = true;
+    G.mission.killsAtStepStart = G.stats.kills;
+    G.mission.dialogue = null;
+    spawnRivals(G, 1520, 260, 3, { health: 50 });
+    // A shot already in the air for the action read.
+    G.combat.bullets.push({
+      x: 1520, y: 380, vx: 0, vy: -780, life: 0.5, from: 'player', dmg: 26,
+    });
+    G.combat.muzzleT = 0.07;
+    addWanted(G, 2, 'shootout on Neon Row');
+    G.police.heatT = 0;
+    positionTrafficNear(G, rng, 1520, 340, 4);
+    G.notice = 'Deal with 3 Vipers';
+    G.noticeT = 99;
+    G.shotReady = true;
+    return;
+  }
+
+  // Unknown shot name: fall back to plain play.
+  G.shotReady = true;
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
+function positionTrafficNear(G, rng, cx, cy, count) {
+  // Nudge a few traffic cars and pedestrians close to the camera focus
+  // so the scene reads as a living street.
+  let placed = 0;
+  for (const car of G.trafficCars) {
+    if (placed >= count) break;
+    const a = rng.range(0, Math.PI * 2);
+    const r = rng.range(180, 620);
+    car.x = cx + Math.cos(a) * r;
+    car.y = cy + Math.sin(a) * r;
+    placed++;
   }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
+  let peds = 0;
+  for (const ped of G.peds) {
+    if (peds >= 8) break;
+    const a = rng.range(0, Math.PI * 2);
+    const r = rng.range(120, 420);
+    ped.x = cx + Math.cos(a) * r;
+    ped.y = cy + Math.sin(a) * r;
+    peds++;
   }
-  return best;
-}
-
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
 }
