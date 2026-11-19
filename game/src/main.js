@@ -2,7 +2,7 @@
 // on-foot movement + jumping, car enter/exit + carjacking, protagonist
 // switching, abilities, shooting input, the main loop and the headless
 // self-test hook (?selftest=1).
-import * as THREE from '../lib/three.module.js';
+import * as THREE from '../lib/three.module.min.js';
 import * as data from './data.js';
 import { clamp, angleDelta, angleLerp, dist2, fmtClock, makeRng, TAU } from './util.js';
 import { buildCity, districtAt } from './city.js';
@@ -128,16 +128,16 @@ const rng = makeRng(20261119);
 
 // Cars: parked + traffic + player-driven (all in G.cars).
 G.cars = [];
-G.parkedCars = spawnParkedCars(rng, 16);
-G.trafficCars = spawnTrafficCars(rng, 14);
+G.parkedCars = spawnParkedCars(rng, 26);
+G.trafficCars = spawnTrafficCars(rng, 22);
 for (const c of [...G.parkedCars, ...G.trafficCars]) {
   scene.add(c.group);
   G.cars.push(c);
 }
 
-// Pedestrians.
+// Pedestrians — dense enough that the sidewalks read as lived-in.
 G.peds = [];
-for (let i = 0; i < 12; i++) {
+for (let i = 0; i < 20; i++) {
   const h = createPedestrian(rng);
   const road = [-252, -180, -108, -36, 36, 108, 180, 252][rng.int(0, 7)];
   const ped = {
@@ -885,8 +885,10 @@ function updateCamera(dt) {
   const p = G.player;
   const aiming = G.aimHeld && !p.car;
   // Distances: on foot the character fills ~30% of the screen height;
-  // driving, the car sits centre-bottom at ~15-20% with the road ahead.
-  const wantDist = p.car ? 8.0 : aiming ? 3.4 : 5.0;
+  // driving, the car sits centre-bottom at ~15% with the road and the
+  // street canyon ahead — pulled back a little further than before so
+  // the dense city, the traffic and the helicopter all read in frame.
+  const wantDist = p.car ? 9.2 : aiming ? 3.4 : 5.0;
   G.camera.dist += (wantDist - G.camera.dist) * Math.min(1, dt * 6);
   // Heading lock: while driving the camera eases back behind the car;
   // on foot it settles behind the character while moving. The mouse
@@ -899,9 +901,10 @@ function updateCamera(dt) {
   }
   const yaw = G.camera.yaw;
   const fx = Math.cos(yaw), fz = Math.sin(yaw);
-  // Shoulder-height camera on foot; higher chase cam while driving.
+  // Shoulder-height camera on foot; higher chase cam while driving so
+  // the camera looks over the traffic ahead instead of through it.
   const height = p.car
-    ? 3.0 + Math.sin(G.camera.pitch) * G.camera.dist * 0.5
+    ? 3.4 + Math.sin(G.camera.pitch) * G.camera.dist * 0.5
     : aiming ? 1.7 + Math.sin(G.camera.pitch) * G.camera.dist * 0.4
     : 1.8 + Math.sin(G.camera.pitch) * G.camera.dist * 0.5;
   const back = Math.cos(G.camera.pitch) * G.camera.dist;
@@ -913,7 +916,7 @@ function updateCamera(dt) {
   const cz = p.z - fz * back + rz * shoulder;
   const cy = (p.y || 0) + height;
   camera3.position.set(cx, cy, cz);
-  const lookDist = p.car ? 10 : aiming ? 6 : 4;
+  const lookDist = p.car ? 13 : aiming ? 6 : 4;
   const lookH = p.car ? 1.2 : 1.5;
   _v.set(p.x + fx * lookDist + rx * shoulder, (p.y || 0) + lookH, p.z + fz * lookDist + rz * shoulder);
   camera3.lookAt(_v);

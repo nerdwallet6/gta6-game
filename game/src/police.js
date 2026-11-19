@@ -4,7 +4,7 @@
 // icons under the stars show whether they know your face, your clothing
 // and your vehicle — clear each one (mask, change clothes, ditch the car).
 // Out of their line of sight the heat cools and stars fall one by one.
-import * as THREE from '../lib/three.module.js';
+import * as THREE from '../lib/three.module.min.js';
 import { createCar, syncCarMesh, damageCar } from './vehicles.js';
 import { damagePlayer } from './combat.js';
 import { createCop, poseHumanoid } from './character.js';

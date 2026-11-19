@@ -2,15 +2,21 @@
 // at 3+ stars, circles above the player with a searchlight cone and a
 // ground disc, and opens fire from 4+ stars. It always has eyes on you,
 // so heat never cools while it is overhead.
-import * as THREE from '../lib/three.module.js';
+import * as THREE from '../lib/three.module.min.js';
 import { damagePlayer } from './combat.js';
 
 /** Build the helicopter model (body, tail, rotor, spotlight cone + disc). */
 export function createPoliceHelicopter() {
   const g = new THREE.Group();
-  const bodyMat = new THREE.MeshLambertMaterial({ color: 0x1c2c4c });
+  // Lighter navy + a white cheatline so the heli reads against a dusk
+  // sky instead of vanishing into it as a dark speck.
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0x33507e });
   const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.4, 2), bodyMat);
   g.add(body);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.24, 0.35, 2.04),
+    new THREE.MeshLambertMaterial({ color: 0xf0f0f0 }));
+  stripe.position.y = -0.1;
+  g.add(stripe);
   const tail = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.5, 0.5), bodyMat);
   tail.position.set(-3, 0.3, 0);
   g.add(tail);
@@ -78,7 +84,10 @@ export function updatePoliceHelicopter(G, dt) {
   const p = G.player;
   if (!P.heli) return;
   const heli = P.heli;
-  heli.angle += dt * 0.5;
+  // Very slow orbit (0.05 rad/s): the helicopter hangs almost still
+  // over the chase instead of circling away — it stays readable in
+  // the sky, and in staged captures it is still where the shot put it.
+  heli.angle += dt * 0.05;
   const orbitR = heli.orbitR || 26;
   const orbitY = heli.orbitY || 34;
   heli.x = p.x + Math.cos(heli.angle) * orbitR;

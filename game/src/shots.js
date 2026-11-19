@@ -52,16 +52,18 @@ export function applyShot(G, name, seed) {
     G.mission.step = 1;
     G.notice = 'Drive to Solmar Plaza';
     G.noticeT = 99;
-    positionTrafficNear(G, rng, 216, -144, 8);
+    positionTrafficNear(G, rng, 216, -144, 10);
     markReady(G);
     return;
   }
 
   if (name === 'chase') {
     // COVER: wanted 3, helicopter overhead-ahead, 2 cruisers in the lane
-    // ahead, golden hour. Player on road z=36 heading east.
+    // ahead, golden hour. Player mid-block on road z=36 heading east —
+    // mid-block, not on the intersection, so the zebra crossing stays
+    // ahead of the car instead of filling the foreground.
     const car = createCar('sport', { color: 0xd84040, driver: 'player' });
-    car.x = 36;
+    car.x = 64;
     car.z = 36;
     car.heading = 0;
     car.speed = 30;
@@ -72,7 +74,8 @@ export function applyShot(G, name, seed) {
     G.player.z = car.z;
     G.player.heading = car.heading;
     G.camera.yaw = 0; // behind the car, looking east down the avenue
-    G.camera.pitch = 0.15; // flatter, so the helicopter stays in frame
+    G.camera.pitch = -0.05; // near-flat, so the helicopter sits well
+    // inside the frame instead of on its top edge
     G.shotDrive = true;
     G.money = 2890;
     G.missionsDone = 2;
@@ -81,13 +84,23 @@ export function applyShot(G, name, seed) {
     G.police.heat = 50; // 3 stars
     G.police.level = 3;
     G.police.knows = { face: true, clothing: true, vehicle: true };
-    // Helicopter ahead of the player, high enough to read in the sky.
+    // Helicopter ahead of the player, close and low enough to read big
+    // in the cover frame. angle starts at +0.3: in headless capture the
+    // game runs ~10x slow and the first frames carry a small negative
+    // time step, so the orbit drifts to ~0 (straight ahead, east) by
+    // capture time instead of swinging away. orbitY stays 22 so the
+    // searchlight cone and ground disc reach the road.
     const heli = spawnPoliceHelicopter(G);
-    heli.angle = 0; // directly ahead (east)
-    heli.orbitR = 85;
+    heli.angle = 0.15; // ~0 (straight ahead, over the road) by capture
+    // time: the early frames carry a small negative dip, and the
+    // orbit is now so slow that the heli barely drifts afterwards.
+    // It must stay over the road centreline — a few metres either
+    // side puts it inside the flanking towers' airspace, below their
+    // rooflines, where the camera cannot see it at all.
+    heli.orbitR = 55;
     heli.orbitY = 22;
     // Two cruisers in the lane ahead, closing slowly.
-    for (const cx of [80, 120]) {
+    for (const cx of [110, 150]) {
       const pc = createCar('sedan', { police: true, driver: 'police' });
       pc.x = cx;
       pc.z = 36;
@@ -102,7 +115,7 @@ export function applyShot(G, name, seed) {
     G.mission.dialogue = null;
     G.notice = 'Outrun the police to Bayview Arena';
     G.noticeT = 99;
-    positionTrafficNear(G, rng, 36, 36, 6);
+    positionTrafficNear(G, rng, 64, 36, 10);
     markReady(G);
     return;
   }
@@ -138,7 +151,7 @@ export function applyShot(G, name, seed) {
     G.noticeT = 99;
     G.hud.showWheel(); // radial weapon wheel open in the shot
     G.wheelOpen = true;
-    positionTrafficNear(G, rng, 216, -180, 4);
+    positionTrafficNear(G, rng, 216, -180, 6);
     markReady(G);
     return;
   }
@@ -164,17 +177,17 @@ export function applyShot(G, name, seed) {
     G.mission.dialogue = null;
     G.notice = 'Bay Heist — reach Solmar Bank';
     G.noticeT = 99;
-    positionTrafficNear(G, rng, 180, -180, 5);
+    positionTrafficNear(G, rng, 180, -180, 6);
     markReady(G);
     return;
   }
 
   if (name === 'race') {
     // Street race: Neon Sprint start, race running, golden-hour vista
-    // down the avenue. Player on road x=252 heading north.
+    // down the avenue. Player mid-block on road x=252 heading north.
     const car = createCar('sport', { color: 0xd84040, driver: 'player' });
     car.x = 252;
-    car.z = -72;
+    car.z = -48;
     car.heading = -Math.PI / 2;
     car.speed = 30;
     G.scene.add(car.group);
@@ -193,7 +206,19 @@ export function applyShot(G, name, seed) {
     startRace(G, 'neon');
     G.notice = 'Neon Sprint — hit every gate!';
     G.noticeT = 99;
-    positionTrafficNear(G, rng, 252, -72, 6);
+    positionTrafficNear(G, rng, 252, -48, 8);
+    // Keep the start straight clear: any traffic car staged in the
+    // player's lane ahead gets shoved onto a side road, so the opening
+    // shot shows the Comet GT at speed instead of rear-ending a taxi
+    // in the first seconds (headless capture is only ~2s in).
+    for (const c of G.trafficCars) {
+      if (Math.abs(c.x - 252) < 8 && c.z < -48 && c.z > -150) {
+        c.x = 180;
+        c.heading = Math.PI / 2;
+        c.aiRoad = 180;
+        c.aiDir = 1;
+      }
+    }
     markReady(G);
     return;
   }
@@ -217,7 +242,7 @@ export function applyShot(G, name, seed) {
     G.weapons.shotgun.reserve = 12;
     G.weapon.current = 'smg';
     G.hud.openMenu('guns', 'Ironworks Arms — weapon locker');
-    positionTrafficNear(G, rng, 144, -144, 4);
+    positionTrafficNear(G, rng, 144, -144, 6);
     markReady(G);
     return;
   }

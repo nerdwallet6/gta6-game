@@ -101,8 +101,10 @@ outfit and a special ability (Rae: Focus Drive slow-mo; Juno: Deadeye).
   and `screenshots/` to `MAKEFUN_OUTPUT_DIR` (else `/output`) and writes
   `dossier.json` with `buildDossier` from `vendor/makefun-game.ts`.
 - `game/index.html` — the page; loads `game/src/main.js` as a module.
-- `game/lib/` — Three.js 0.187.0 bundled locally (`three.module.js`,
-  `three.core.js`); no CDN, no network.
+- `game/lib/` — Three.js 0.187.0 bundled locally as a single
+  self-contained minified module (`three.module.min.js`, 5 lines,
+  built from the official `three.module.js` + `three.core.js` with
+  esbuild + Terser); no CDN, no network.
 - `game/src/` — the game's own source, one file per job:
   - `main.js` — boot, game loop, camera, input, screens
   - `city.js` — Solmar City generation, roads, collision, day/night

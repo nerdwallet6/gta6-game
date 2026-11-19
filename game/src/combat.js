@@ -1,7 +1,7 @@
 // combat.js — third-person shooting: hitscan weapons with a raycaster,
 // weapon state (owned, mag, reserve), enemies (Vipers + police on foot)
 // with simple chase-and-shoot AI, tracers, muzzle flash and pickups.
-import * as THREE from '../lib/three.module.js';
+import * as THREE from '../lib/three.module.min.js';
 import { WEAPONS, WEAPON_ORDER } from './data.js';
 import { createViper, createCop, poseHumanoid } from './character.js';
 import { angleDelta, clamp, dist2 } from './util.js';
