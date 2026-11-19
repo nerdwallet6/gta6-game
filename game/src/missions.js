@@ -1,113 +1,22 @@
-// missions.js — the story: a 5-mission chain for Rae Solano, a driver
-// new to Solmar City who falls in with fixer Marla Voss. Each mission
-// is a list of objectives (go to, pick up, deliver, survive, eliminate)
-// with dialogue, a map marker and a cash reward.
-import { dist, fmtMoney } from './util.js';
-import { spawnRivals } from './combat.js';
-import { addWanted } from './player.js';
-import { clearWanted } from './police.js';
-
-// Mission target spots, chosen on the road grid (world pixels).
-export const SPOTS = {
-  plaza: { x: 560, y: 1180, label: 'Solmar Plaza' },
-  marina: { x: 1520, y: 980, label: 'Marina Docks' },
-  neonRow: { x: 1520, y: 260, label: 'Neon Row' },
-  harbor: { x: 2720, y: 260, label: 'Old Harbor' },
-  tower: { x: 720, y: 980, label: 'Solmar Tower' },
-  flats: { x: 2720, y: 1700, label: 'Cactus Flats' },
-  bayview: { x: 1920, y: 2060, label: 'Bayview Arena' },
-  beach: { x: 1100, y: 2280, label: 'South Beach' },
-};
-
-export const MISSIONS = [
-  {
-    id: 'first-wheels',
-    title: 'First Wheels',
-    giver: 'Marla Voss',
-    briefing: [
-      'Marla: Rae. You want work in this city, you need wheels.',
-      'Marla: Borrow a car. Any car. Then meet me at Solmar Plaza.',
-    ],
-    reward: 150,
-    steps: [
-      { type: 'steal', text: 'Get a car (walk to one, press E)' },
-      { type: 'goto', spot: 'plaza', text: 'Drive to Solmar Plaza' },
-    ],
-  },
-  {
-    id: 'the-pickup',
-    title: 'The Pickup',
-    giver: 'Marla Voss',
-    briefing: [
-      'Marla: A package is waiting at the Marina Docks.',
-      'Marla: Pick it up, bring it to Old Harbor. No cops, no fuss.',
-    ],
-    reward: 300,
-    steps: [
-      { type: 'goto', spot: 'marina', text: 'Go to the Marina Docks' },
-      { type: 'collect', spot: 'marina', text: 'Pick up the package (press E)' },
-      { type: 'goto', spot: 'harbor', text: 'Deliver to Old Harbor' },
-      { type: 'deliver', spot: 'harbor', text: 'Hand over the package (press E)' },
-    ],
-  },
-  {
-    id: 'heat-on-neon-row',
-    title: 'Heat on Neon Row',
-    giver: 'Marla Voss',
-    briefing: [
-      'Marla: The Vipers are muscling in on Neon Row. Three of them.',
-      'Marla: Send them a message. Then lose the heat before you come back.',
-    ],
-    reward: 500,
-    steps: [
-      { type: 'goto', spot: 'neonRow', text: 'Reach Neon Row' },
-      { type: 'eliminate', spot: 'neonRow', count: 3, text: 'Deal with 3 Vipers' },
-      { type: 'escape', text: 'Lose the wanted level' },
-    ],
-  },
-  {
-    id: 'the-getaway',
-    title: 'The Getaway',
-    giver: 'Dante Cole',
-    briefing: [
-      'Dante: The cops are onto the drop. I need a driver, now.',
-      'Dante: Take the package to Bayview Arena — and they WILL chase you.',
-    ],
-    reward: 750,
-    steps: [
-      { type: 'goto', spot: 'flats', text: 'Meet Dante at Cactus Flats' },
-      { type: 'collect', spot: 'flats', text: 'Grab the package (press E)' },
-      { type: 'chase', spot: 'bayview', text: 'Outrun the police to Bayview Arena' },
-    ],
-  },
-  {
-    id: 'king-of-the-bay',
-    title: 'King of the Bay',
-    giver: 'Marla Voss',
-    briefing: [
-      'Marla: One last job, Rae. The Vipers\' boss is at Solmar Tower.',
-      'Marla: Finish it, and the bay is yours. Then meet me at South Beach.',
-    ],
-    reward: 1500,
-    steps: [
-      { type: 'goto', spot: 'tower', text: 'Reach Solmar Tower' },
-      { type: 'eliminate', spot: 'tower', count: 4, text: 'Take down 4 Vipers' },
-      { type: 'goto', spot: 'beach', text: 'Meet Marla at South Beach' },
-    ],
-  },
-];
+// missions.js — the story engine for Solmar Nights 3D: 9 data-driven
+// missions (goto / collect / deliver / eliminate / escape / chase / race /
+// heist steps), dialogue and a 3D beacon at the objective. Street races
+// live in streetRaces.js; respect ranks in respectRanks.js; per-district
+// standing in districtStanding.js.
+import { MISSIONS, SPOTS } from './data.js';
+import { dist2, fmtMoney } from './util.js';
+import { createBeacon } from './city.js';
+import { spawnEnemy } from './combat.js';
+import { addCrime, clearWanted } from './police.js';
+import { startRace } from './streetRaces.js';
+import { addDistrictStanding } from './districtStanding.js';
+import { totalRespect } from './respectRanks.js';
 
 export function createMissionState() {
   return {
-    index: 0,
-    step: 0,
-    started: false,
-    done: false,
-    rivalsSpawned: false,
-    killsAtStepStart: 0,
-    packageHeld: false,
-    dialogue: null, // {lines, i, t}
-    completeT: 0,
+    index: 0, step: 0, started: false, done: false,
+    rivalsSpawned: false, killsAtStepStart: 0,
+    packageHeld: false, dialogue: null, completeT: 0,
   };
 }
 
@@ -123,14 +32,43 @@ export function currentStep(G) {
 
 export function missionTarget(G) {
   const step = currentStep(G);
-  if (!step || !step.spot) return null;
-  return SPOTS[step.spot];
+  if (!step) return null;
+  if (step.spot) return SPOTS[step.spot];
+  if (step.race) return SPOTS[RACES[step.race].start];
+  return null;
 }
 
-/** Open a mission: show its briefing dialogue and mark it started. */
+/** Show a dialogue box (lines advance with E / click). */
+export function showDialogue(G, lines) {
+  G.mission.dialogue = { lines, i: 0 };
+}
+
+export function advanceDialogue(G) {
+  const d = G.mission.dialogue;
+  if (!d) return false;
+  d.i++;
+  if (d.i >= d.lines.length) {
+    G.mission.dialogue = null;
+    return false;
+  }
+  return true;
+}
+
+/** Open a mission: briefing dialogue + beacon + notice. Later missions
+ *  need total respect; when gated, returns false and the caller retries
+ *  later instead of opening the briefing. */
 export function startMission(G, index) {
   const m = MISSIONS[index];
-  if (!m) return;
+  if (!m) return false;
+  const need = m.req || 0;
+  const have = totalRespect(G);
+  if (have < need) {
+    G.notice = 'Need more respect — ' + m.title + ' needs ' + need +
+      ' total (you have ' + have + '). Do jobs and races.';
+    G.noticeT = 4;
+    G.audio.sfx('deny');
+    return false;
+  }
   G.mission.index = index;
   G.mission.step = 0;
   G.mission.started = true;
@@ -141,39 +79,50 @@ export function startMission(G, index) {
   G.audio.sfx('mission');
   G.notice = 'New mission: ' + m.title;
   G.noticeT = 3.5;
+  refreshBeacon(G);
+  return true;
 }
 
-export function showDialogue(G, lines) {
-  G.mission.dialogue = { lines, i: 0, t: 0 };
+/** (Re)place the 3D beacon at the current objective. */
+export function refreshBeacon(G) {
+  if (G.mission.beacon) {
+    G.scene.remove(G.mission.beacon);
+    G.mission.beacon = null;
+  }
+  if (G.race.active && G.race.beacon) {
+    G.scene.remove(G.race.beacon);
+    G.race.beacon = null;
+  }
+  if (G.mission.done || !G.mission.started) return;
+  const t = missionTarget(G);
+  if (!t) return;
+  const b = createBeacon(0xffd25f, 3);
+  b.position.set(t.x, 0, t.z);
+  G.scene.add(b);
+  G.mission.beacon = b;
 }
 
-export function advanceDialogue(G) {
-  const d = G.mission.dialogue;
-  if (!d) return;
-  d.i++;
-  if (d.i >= d.lines.length) G.mission.dialogue = null;
-}
-
-/**
- * Called when the player presses E: handles mission interactions
- * (pickup / deliver). Entering cars is handled by player.js.
- */
+/** E key: mission pickup / deliver interactions. */
 export function missionInteract(G) {
   const step = currentStep(G);
   if (!step || !G.mission.started) return false;
   const target = missionTarget(G);
   if (!target) return false;
-  if (dist(G.player.x, G.player.y, target.x, target.y) > 90) return false;
+  const p = G.player;
+  if (dist2(p.x, p.z, target.x, target.z) > 14) return false;
   if (step.type === 'collect') {
     G.mission.packageHeld = true;
     G.audio.sfx('pickup');
-    G.notice = 'Package secured.';
+    G.notice = step.id === 'bay-heist' ? 'Vault cash secured.' : 'Package secured.';
+    if (step.spot === 'bank') addCrime(G, 'heist');
     G.noticeT = 2;
     advanceStep(G);
     return true;
   }
   if (step.type === 'deliver') {
-    if (!G.mission.packageHeld) return false;
+    if (step.spot === 'marina' || step.spot === 'neonRow' || step.spot === 'plaza') {
+      // Midnight Run drops need no package.
+    } else if (!G.mission.packageHeld) return false;
     G.mission.packageHeld = false;
     G.audio.sfx('cash');
     advanceStep(G);
@@ -182,7 +131,6 @@ export function missionInteract(G) {
   return false;
 }
 
-/** Move to the next objective, or finish the mission with its reward. */
 function advanceStep(G) {
   const m = currentMission(G);
   if (!m) return;
@@ -197,12 +145,15 @@ function advanceStep(G) {
       G.notice = 'Objective: ' + step.text;
       G.noticeT = 3;
     }
+    refreshBeacon(G);
   }
 }
 
 function completeMission(G, m) {
   G.money += m.reward;
   G.missionsDone++;
+  const spot = SPOTS[currentStep(G)?.spot || 'plaza'];
+  if (spot) addDistrictStanding(G, spot.district, 12);
   G.audio.sfx('mission');
   G.notice = 'Mission complete: ' + m.title + '  +' + fmtMoney(m.reward);
   G.noticeT = 4;
@@ -214,6 +165,10 @@ function completeMission(G, m) {
         ? 'One more job when you are ready.'
         : 'The bay is yours, Rae.'),
   ]);
+  if (G.mission.beacon) {
+    G.scene.remove(G.mission.beacon);
+    G.mission.beacon = null;
+  }
   if (G.mission.index + 1 < MISSIONS.length) {
     G.mission.index++;
     G.mission.step = 0;
@@ -222,12 +177,13 @@ function completeMission(G, m) {
   } else {
     G.mission.done = true;
     G.screen = 'complete';
+    G.hud.showComplete();
   }
+  G.save.saveGame(G);
 }
 
-/** Per-frame mission logic: watch the current step's condition. */
+/** Per-frame mission logic. */
 export function updateMissions(G, dt) {
-  void dt;
   const M = G.mission;
   if (M.done || !M.started) return;
   const step = currentStep(G);
@@ -241,37 +197,59 @@ export function updateMissions(G, dt) {
     }
     case 'goto': {
       const t = SPOTS[step.spot];
-      if (dist(p.x, p.y, t.x, t.y) < 90) advanceStep(G);
+      if (dist2(p.x, p.z, t.x, t.z) < 14) advanceStep(G);
       break;
     }
     case 'collect':
     case 'deliver': {
-      // Waits for missionInteract (E). The HUD hints when close.
+      // Waits for missionInteract (E).
       break;
     }
     case 'eliminate': {
       const t = SPOTS[step.spot];
-      if (!M.rivalsSpawned && dist(p.x, p.y, t.x, t.y) < 420) {
+      if (!M.rivalsSpawned && dist2(p.x, p.z, t.x, t.z) < 60) {
         M.rivalsSpawned = true;
-        spawnRivals(G, t.x, t.y, step.count, { health: 50 });
-        G.notice = 'Vipers ahead — take them down!';
+        const n = step.count;
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2;
+          const isBoss = step.boss && i === 0;
+          const e = spawnEnemy(G.scene, isBoss ? 'boss' : 'viper',
+            t.x + Math.cos(a) * 12, t.z + Math.sin(a) * 12,
+            { health: isBoss ? 220 : 60 });
+          G.combat.enemies.push(e);
+          G.combat.registerHitMesh(e);
+        }
+        G.notice = step.boss ? 'The Viper boss is here — take them down!' : 'Vipers ahead — take them down!';
         G.noticeT = 3;
       }
       if (M.rivalsSpawned) {
         const killed = G.stats.kills - M.killsAtStepStart;
-        if (killed >= step.count && G.combat.enemies.length === 0) advanceStep(G);
+        if (killed >= step.count && G.combat.enemies.filter((e) => !e.dead).length === 0) {
+          advanceStep(G);
+        }
       }
       break;
     }
     case 'escape': {
-      if (G.wanted === 0) advanceStep(G);
+      if (G.police.level === 0) advanceStep(G);
       break;
     }
     case 'chase': {
       const t = SPOTS[step.spot];
-      if (dist(p.x, p.y, t.x, t.y) < 100) {
+      if (dist2(p.x, p.z, t.x, t.z) < 16) {
         clearWanted(G);
         advanceStep(G);
+      }
+      break;
+    }
+    case 'race': {
+      if (!G.race.active) {
+        // When the mission race finishes, advance this step.
+        G.race.onFinish = () => {
+          const s = currentStep(G);
+          if (s && s.type === 'race') advanceStep(G);
+        };
+        startRace(G, step.race);
       }
       break;
     }
@@ -280,32 +258,4 @@ export function updateMissions(G, dt) {
   }
 }
 
-/**
- * Draw the pulsing objective marker in the world. The screen-edge
- * arrow and minimap dot live in hud.js.
- */
-export function drawMissionMarker(ctx, G) {
-  const step = currentStep(G);
-  if (!step || !G.mission.started || G.screen !== 'play') return;
-  const t = missionTarget(G);
-  if (!t) return;
-  const pulse = 1 + Math.sin(G.time * 4) * 0.12;
-  ctx.save();
-  ctx.strokeStyle = '#ffd25f';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(t.x, t.y, 44 * pulse, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = 'rgba(255,210,95,0.25)';
-  ctx.beginPath();
-  ctx.arc(t.x, t.y, 44 * pulse, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#ffd25f';
-  ctx.beginPath();
-  ctx.moveTo(t.x, t.y - 58);
-  ctx.lineTo(t.x - 12, t.y - 34);
-  ctx.lineTo(t.x + 12, t.y - 34);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
+

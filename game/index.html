@@ -3,42 +3,169 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vice City Nights — an open-world crime story in Solmar City</title>
+<title>Solmar Nights — a 3D open-world crime story in Solmar City</title>
+<link rel="icon" href="data:,">
 <style>
   html, body {
-    margin: 0;
-    padding: 0;
-    background: #10141c;
-    height: 100%;
-    overflow: hidden;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0; padding: 0; background: #0a0e14; height: 100%;
+    overflow: hidden; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #fff;
   }
-  #wrap {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(180deg, #1c2438 0%, #10141c 100%);
+  #game { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #hud-top-left { position: absolute; top: 14px; left: 16px; text-shadow: 0 1px 4px #000; }
+  #hud-vitals { display: flex; flex-direction: column; gap: 5px; width: 170px; }
+  .bar { position: relative; height: 14px; background: rgba(0,0,0,0.6); border-radius: 3px; overflow: hidden; }
+  .bar div { height: 100%; }
+  #bar-health { background: #7dff8a; width: 100%; }
+  #bar-stamina { background: #ffd25f; width: 100%; }
+  #bar-focus { background: #c77dff; width: 100%; }
+  #bar-armor { background: #4080ff; width: 0%; }
+  #bar-nos { background: #ff4fd8; width: 0%; }
+  .bar span { position: absolute; left: 6px; top: 0; font-size: 10px; line-height: 14px; color: #111; font-weight: 700; }
+  #hud-district { font-size: 14px; color: #e8e8e8; margin-top: 6px; }
+  #hud-top-right { position: absolute; top: 14px; right: 16px; text-align: right; text-shadow: 0 1px 4px #000; }
+  #hud-weapon { font-size: 17px; font-weight: 700; color: #fff; }
+  #hud-money { font-size: 26px; font-weight: 800; color: #7dff8a; }
+  #hud-stars { font-size: 26px; letter-spacing: 2px; color: #ffd25f; }
+  #hud-knows { font-size: 20px; letter-spacing: 6px; margin-top: 2px; }
+  #hud-respect { font-size: 13px; color: #ffd25f; margin-top: 4px; }
+  #hud-objective {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.55); padding: 8px 16px; border-radius: 6px;
+    font-size: 15px; max-width: 46vw; text-align: center;
   }
-  canvas {
-    display: block;
-    width: min(100vw, 177.78vh);
-    height: min(100vh, 56.25vw);
-    background: #b8a06a;
-    image-rendering: auto;
-    box-shadow: 0 0 60px rgba(0, 0, 0, 0.6);
+  /* Contact-sheet size (768x480): keep the HUD inside the frame — the
+   * objective truncates with an ellipsis instead of wrapping over the
+   * cash/stars cluster, and the shop menu scrolls instead of overflowing. */
+  @media (max-width: 900px) {
+    #hud-objective { max-width: 36vw; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #hud-notice { font-size: 14px; top: 56px; }
+    #hud-money { font-size: 20px; }
+    #hud-stars { font-size: 20px; }
+    #hud-weapon { font-size: 14px; }
+    #hud-vitals { width: 130px; }
+    #hud-menu { max-height: 86vh; overflow-y: auto; }
+    #hud-menu.wide { min-width: min(760px, 88vw); }
+    #hud-prompt { font-size: 14px; }
+    #hud-speed { font-size: 15px; }
   }
-  #fallback {
-    display: none;
+  #hud-notice {
+    position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+    font-size: 17px; font-weight: 700; color: #ffd25f; text-shadow: 0 1px 4px #000;
+    transition: opacity 0.3s;
   }
+  #hud-crosshair {
+    display: none; position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%); font-size: 26px; font-weight: 700;
+    color: rgba(255,255,255,0.9); text-shadow: 0 0 4px #000;
+  }
+  #hud-bottom-left { position: absolute; left: 16px; bottom: 16px; }
+  #minimap { border-radius: 50%; border: 3px solid rgba(255,255,255,0.75); box-shadow: 0 0 12px rgba(0,0,0,0.7); background: #20262e; }
+  #hud-bottom-right { position: absolute; right: 18px; bottom: 16px; text-align: right; text-shadow: 0 1px 4px #000; }
+  #hud-prompt { font-size: 16px; font-weight: 700; color: #ffd25f; margin-bottom: 4px; }
+  #hud-radio { font-size: 13px; color: #e8e8e8; }
+  #hud-speed { font-size: 18px; font-weight: 700; color: #fff; }
+  #hud-nos { width: 170px; margin-left: auto; margin-top: 4px; }
+  #hud-dialogue {
+    display: none; position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%);
+    width: min(640px, 80vw); background: rgba(0,0,0,0.75); border-left: 4px solid #ffd25f;
+    padding: 14px 18px; border-radius: 4px; font-size: 16px; line-height: 1.45;
+  }
+  .dlg-hint { font-size: 12px; color: #aaa; margin-top: 6px; }
+  #hud-wheel {
+    display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    text-align: center;
+  }
+  #hud-wheel.open { display: block; }
+  .wheel-title { font-size: 13px; letter-spacing: 3px; color: #ffd25f; margin-bottom: 8px; text-shadow: 0 1px 4px #000; }
+  .wheel-circle {
+    position: relative; width: 300px; height: 300px; margin: 0 auto;
+    border: 2px solid rgba(255,255,255,0.5); border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+  }
+  .wheel-item {
+    position: absolute; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.7); border-radius: 6px; padding: 6px 10px;
+    font-size: 14px; text-align: center; min-width: 86px;
+  }
+  .wheel-item b { display: block; }
+  .wheel-item span { color: #aaa; font-size: 12px; }
+  .wheel-item.cur { background: rgba(255,210,95,0.35); outline: 2px solid #ffd25f; }
+  .wheel-item.locked { opacity: 0.45; }
+  .wheel-hint { font-size: 12px; color: #ddd; margin-top: 8px; text-shadow: 0 1px 4px #000; }
+  #hud-menu {
+    display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    background: rgba(10,12,18,0.92); border: 1px solid #ffd25f; border-radius: 8px;
+    padding: 18px 22px; min-width: 460px; max-height: 86vh; overflow-y: auto; pointer-events: auto;
+  }
+  #hud-menu.open { display: block; }
+  #hud-menu.wide { min-width: min(880px, 92vw); background: rgba(10,12,18,0.88); }
+  .stat-bars { display: block; margin-top: 5px; }
+  .stat { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; margin-top: 2px; }
+  .stat i { width: 36px; font-style: normal; }
+  .stat b { display: block; height: 5px; background: #ffd25f; border-radius: 2px; }
+  .menu-title { font-size: 20px; font-weight: 800; color: #ffd25f; }
+  .menu-cash { font-size: 15px; color: #7dff8a; margin: 4px 0 10px; }
+  .menu-row { display: flex; gap: 14px; padding: 7px 8px; font-size: 15px; border-radius: 4px; }
+  .menu-row.sel { background: rgba(255,210,95,0.25); }
+  .menu-label { flex: 1; }
+  .menu-hint { color: #aaa; font-size: 13px; }
+  .menu-price { color: #7dff8a; font-weight: 700; }
+  .menu-foot { font-size: 12px; color: #aaa; margin-top: 10px; }
+  #hud-bust {
+    display: none; position: absolute; left: 50%; top: 110px; transform: translateX(-50%);
+    width: 220px; height: 14px; background: rgba(0,0,0,0.6); border-radius: 3px; overflow: hidden;
+  }
+  #hud-bust-fill { height: 100%; background: #ff5040; width: 0%; }
+  #hud-bust span { position: absolute; left: 50%; top: -18px; transform: translateX(-50%); font-size: 12px; color: #ff8080; }
+  #hud-flash { position: absolute; inset: 0; background: #ff2020; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+  #hud-map {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(8,10,16,0.88); pointer-events: none;
+  }
+  #hud-map.hidden { display: none; }
+  #mapcanvas { border: 2px solid rgba(255,255,255,0.6); border-radius: 6px; background: #10141a; }
+  .map-hint { font-size: 13px; color: #ddd; margin-top: 10px; text-shadow: 0 1px 4px #000; }
+  .screen {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: linear-gradient(180deg, rgba(10,10,20,0.55) 0%, rgba(10,10,20,0.85) 100%);
+    pointer-events: auto; padding: 20px;
+  }
+  .screen.hidden { display: none; }
+  .screen h1 {
+    font-size: 54px; margin: 0; letter-spacing: 4px; color: #ffd25f;
+    text-shadow: 0 0 24px rgba(255,80,180,0.6), 0 2px 0 #000;
+  }
+  .screen h2 { font-size: 17px; font-weight: 400; color: #e8e8e8; margin: 8px 0 4px; }
+  .screen .tag { color: #7dff8a; font-size: 15px; margin: 6px 0 18px; }
+  .controls-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 28px; text-align: left;
+    font-size: 14px; color: #ddd; margin-bottom: 22px;
+  }
+  .controls-grid b { color: #ffd25f; }
+  .screen button {
+    pointer-events: auto; cursor: pointer; font-size: 17px; font-weight: 700;
+    padding: 12px 34px; margin: 6px; border-radius: 6px; border: none;
+    background: #ffd25f; color: #111;
+  }
+  .screen button:hover { background: #ffe08a; }
+  .screen .fine { font-size: 12px; color: #999; margin-top: 16px; }
+  #pause-stats, #complete-stats { font-size: 15px; color: #ddd; margin-bottom: 16px; line-height: 1.7; }
+  #test-results { display: none; }
+  #fallback { display: none; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="game" width="1280" height="720"></canvas>
-</div>
-<div id="fallback">Vice City Nights — keyboard &amp; mouse · WASD move/drive · E enter cars · P pause</div>
+<canvas id="game"></canvas>
+<div id="hud"></div>
+<div id="test-results"></div>
+<div id="fallback">Solmar Nights 3D — keyboard &amp; mouse · WASD move/drive · E enter cars · P pause</div>
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

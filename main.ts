@@ -1,4 +1,4 @@
-// main.ts — Vice City Nights, the make.fun gta6-01 entry program.
+// main.ts — Solmar Nights, the make.fun gta6-01 entry program.
 //
 // Copies game/ and screenshots/ from this repository into the output
 // directory (MAKEFUN_OUTPUT_DIR, or /output when that is unset) and
@@ -74,7 +74,7 @@ function main(): void {
   const gameFiles = listTree(join(OUT_DIR, 'game')).filter((p) => !p.endsWith('/'));
   const shotFiles = listTree(join(OUT_DIR, 'screenshots')).filter((p) => !p.endsWith('/'));
   console.log(
-    'Vice City Nights: wrote ' + OUT_DIR + ' — ' +
+    'Solmar Nights: wrote ' + OUT_DIR + ' — ' +
     gameFiles.length + ' game files, ' +
     shotFiles.length + ' screenshots (' + shotFiles.join(', ') + '), ' +
     'dossier.json ' + dossier.length + ' bytes.',

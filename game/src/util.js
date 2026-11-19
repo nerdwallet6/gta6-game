@@ -1,5 +1,5 @@
-// util.js — shared math, angles and seeded randomness for Vice City Nights.
-// Every helper here is pure: no game state, no DOM, no side effects.
+// util.js — shared math, angles and seeded randomness for Solmar Nights 3D.
+// Pure helpers only: no game state, no DOM, no side effects.
 
 export const TAU = Math.PI * 2;
 
@@ -15,22 +15,22 @@ export function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-/** Euclidean distance between two points. */
-export function dist(x1, y1, x2, y2) {
+/** Euclidean distance on the XZ ground plane. */
+export function dist2(x1, z1, x2, z2) {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+/** 3D distance. */
+export function dist3(x1, y1, z1, x2, y2, z2) {
   const dx = x2 - x1;
   const dy = y2 - y1;
-  return Math.sqrt(dx * dx + dy * dy);
+  const dz = z2 - z1;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-/** Angle from (x1, y1) toward (x2, y2). */
-export function angleTo(x1, y1, x2, y2) {
-  return Math.atan2(y2 - y1, x2 - x1);
-}
-
-/**
- * Shortest signed rotation from angle a to angle b, in (-PI, PI].
- * Lets cars and characters turn the short way around.
- */
+/** Shortest signed rotation from angle a to angle b, in (-PI, PI]. */
 export function angleDelta(a, b) {
   let d = (b - a) % TAU;
   if (d > Math.PI) d -= TAU;
@@ -97,4 +97,11 @@ export function fmtTime(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return m + ':' + String(s).padStart(2, '0');
+}
+
+/** "17:30" style clock for a 0-24 hour value. */
+export function fmtClock(hours) {
+  const h = Math.floor(hours) % 24;
+  const m = Math.floor((hours % 1) * 60);
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
 }
