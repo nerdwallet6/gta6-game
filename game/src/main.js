@@ -1,28 +1,68 @@
-// main.js — Solmar Nights 3D: the game bootstrap, third-person camera,
-// on-foot movement + jumping, car enter/exit + carjacking, protagonist
-// switching, abilities, shooting input, the main loop and the headless
-// self-test hook (?selftest=1).
+// main.js — Solmar Nights 3D: bootstrap, camera, movement, driving,
+// protagonist switching, abilities, shooting input, the main loop and
+// the headless self-test hook (?selftest=1). (v4)
+//
+// The game state lives in a single object, G. Every subsystem reads
+// and writes through it: the player and companion, the police, the
+// combat state, missions, races, the economy, audio, the HUD and the
+// save system. main.js owns the frame loop and the input; the
+// subsystems own their own rules.
 import * as THREE from '../lib/three.module.min.js';
 import * as data from './data.js';
-import { clamp, angleDelta, angleLerp, dist2, fmtClock, makeRng, TAU } from './util.js';
-import { buildCity, districtAt } from './city.js';
-import { createProtagonist, createPedestrian, poseHumanoid } from './character.js';
 import {
-  createCar, syncCarMesh, drivePlayerCar, damageCar,
-  updateTrafficCar, spawnParkedCars, spawnTrafficCars,
+  clamp,
+  angleDelta,
+  angleLerp,
+  dist2,
+  fmtClock,
+  makeRng,
+  TAU,
+} from './util.js';
+import { buildCity, districtAt } from './city.js';
+import {
+  createProtagonist,
+  createPedestrian,
+  poseHumanoid,
+} from './character.js';
+import {
+  createCar,
+  syncCarMesh,
+  drivePlayerCar,
+  damageCar,
+  updateTrafficCar,
+  spawnParkedCars,
+  spawnTrafficCars,
 } from './vehicles.js';
 import {
-  createWeaponState, spawnEnemy, removeEnemy, playerShoot,
-  damageEnemy, damagePlayer, playerPunch, updateEnemy, updatePickups,
+  createWeaponState,
+  spawnEnemy,
+  removeEnemy,
+  playerShoot,
+  damageEnemy,
+  damagePlayer,
+  playerPunch,
+  updateEnemy,
+  updatePickups,
   spawnPickup,
 } from './combat.js';
 import {
-  createPoliceState, addCrime, clearWanted, updatePolice, wasted,
+  createPoliceState,
+  addCrime,
+  clearWanted,
+  updatePolice,
+  wasted,
 } from './police.js';
 import {
-  createMissionState, currentMission, currentStep,
-  missionTarget, startMission, showDialogue, advanceDialogue,
-  missionInteract, updateMissions, refreshBeacon,
+  createMissionState,
+  currentMission,
+  currentStep,
+  missionTarget,
+  startMission,
+  showDialogue,
+  advanceDialogue,
+  missionInteract,
+  updateMissions,
+  refreshBeacon,
 } from './missions.js';
 import { createRaceState, updateRace } from './streetRaces.js';
 import * as economy from './economy.js';
@@ -31,71 +71,129 @@ import { createHud } from './hud.js';
 import { createSave } from './save.js';
 import { applyShot } from './shots.js';
 
+// URL parameters: ?shot=<id>&seed=<n> stages a screenshot,
+// ?selftest=1 runs the headless end-to-end checks.
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot');
 const SEED = parseInt(params.get('seed') || '1', 10) || 1;
 const SELFTEST = params.get('selftest') === '1';
 
-// ---------------- game state ----------------
+// ------------------------------------------------------------------
+// Game state. One object, G, carries everything the frame loop and
+// the subsystems need. Fields are grouped by concern; the subsystems
+// are filled in below, right after the plain values.
+// ------------------------------------------------------------------
 const G = {
   data,
-  screen: 'start', // start | play | pause | wasted | busted | complete
+  // Screen: start | play | pause | wasted | busted | complete.
+  screen: 'start',
   time: 0,
-  timeOfDay: 18.75, // 18:45 golden hour
+  // 18:45, golden hour — the v3 look.
+  timeOfDay: 18.75,
   timeScale: 1,
-  slowmoT: 0, slowmoCooldown: 0,
+  slowmoT: 0,
+  slowmoCooldown: 0,
   money: 0,
   missionsDone: 0,
   mission: createMissionState(),
   race: createRaceState(),
   respect: {},
-  stats: { kills: 0, shotsFired: 0, shotsHit: 0, racesWon: 0, racesRun: 0, carsStolen: 0 },
+  stats: {
+    kills: 0,
+    shotsFired: 0,
+    shotsHit: 0,
+    racesWon: 0,
+    racesRun: 0,
+    carsStolen: 0,
+  },
   weapons: createWeaponState(),
   weapon: { current: 'pistol' },
-  weaponMods: {}, // per-weapon attachments {suppressor, extmag}
+  // Per-weapon attachments: {suppressor, extmag} by weapon id.
+  weaponMods: {},
   outfitsOwned: ['street'],
   protagonistIndex: 0,
   protagonist: data.PROTAGONISTS[0],
-  notice: '', noticeT: 0,
+  notice: '',
+  noticeT: 0,
   menu: null,
-  shot: null, shotReady: false,
+  shot: null,
+  shotReady: false,
   clockText: '18:45',
   keys: {},
-  mouseDown: false, aimHeld: false,
+  mouseDown: false,
+  aimHeld: false,
   wheelOpen: false,
-  lastMouseMove: 0, // game time of the last mouse orbit (camera auto-align)
-  enterAnim: null, // {car, t, fromX, fromZ, doorX, doorZ} while entering a car
-  ownedCar: null, // car stored at the safehouse {type, color, upgrades, nos}
+  // Game time of the last mouse orbit (the camera auto-aligns after
+  // 1.2s without one).
+  lastMouseMove: 0,
+  // {car, t, fromX, fromZ, doorX, doorZ} while walking to a car door.
+  enterAnim: null,
+  // The car stored at the safehouse: {type, color, upgrades, nos}.
+  ownedCar: null,
 };
 window.__game = G;
 
-// Player state.
+// The player: position, heading, velocity, health, vehicle, outfit.
 G.player = {
-  x: -72, z: -72, y: 0, vy: 0, heading: 0, phase: 0,
-  vx: 0, vz: 0, speed: 0,
-  health: 100, armor: 0, stamina: 100,
-  car: null, outfit: 'street', masked: false, dead: false,
-  humanoid: null, onGround: true,
+  x: -72,
+  z: -72,
+  y: 0,
+  vy: 0,
+  heading: 0,
+  phase: 0,
+  vx: 0,
+  vz: 0,
+  speed: 0,
+  health: 100,
+  armor: 0,
+  stamina: 100,
+  car: null,
+  outfit: 'street',
+  masked: false,
+  dead: false,
+  humanoid: null,
+  onGround: true,
 };
-// Companion (the other protagonist) follows on foot.
-G.companion = { humanoid: null, x: -70, z: -70, heading: 0, phase: 0, visible: true };
-// Camera rig.
+
+// The companion (the other protagonist) follows on foot.
+G.companion = {
+  humanoid: null,
+  x: -70,
+  z: -70,
+  heading: 0,
+  phase: 0,
+  visible: true,
+};
+
+// The chase camera rig: yaw/pitch/distance, plus the derived heading.
 G.camera = { yaw: Math.PI * 0.75, pitch: 0.32, dist: 6.5, heading: 0 };
 
-// Sub-systems (filled in init).
+// Sub-systems, filled in at boot.
 G.police = createPoliceState();
+// A bound crime reporter so subsystems can call G.police.crime(kind).
 G.police.crime = (kind) => addCrime(G, kind);
 G.audio = createAudio();
 G.save = createSave();
 G.missions = { currentMission, currentStep, missionTarget };
 G.economy = economy;
 G.combat = {
-  enemies: [], tracers: [], pickups: [], hitMeshes: [],
-  fireT: 0, muzzleT: 0, punchT: 0,
+  enemies: [],
+  tracers: [],
+  pickups: [],
+  hitMeshes: [],
+  fireT: 0,
+  muzzleT: 0,
+  punchT: 0,
+  // Register an invisible hit sphere for an enemy so the raycaster
+  // can find it. The sphere follows the enemy each frame.
   registerHitMesh(e) {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.95, 8, 6),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }),
     );
     mesh.position.set(e.x, 1.1, e.z);
     mesh.userData.target = e;
@@ -106,7 +204,9 @@ G.combat = {
   damagePlayer: (amt) => damagePlayer(G, amt),
 };
 
-// ---------------- renderer / scene ----------------
+// ------------------------------------------------------------------
+// Renderer and scene.
+// ------------------------------------------------------------------
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -114,7 +214,12 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b5e0);
 G.scene = scene;
-const camera3 = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
+const camera3 = new THREE.PerspectiveCamera(
+  62,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  1200,
+);
 G.camera3 = camera3;
 window.addEventListener('resize', () => {
   camera3.aspect = window.innerWidth / window.innerHeight;
@@ -122,11 +227,12 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// The city: buildings, roads, colliders, shop markers.
 const city = buildCity(scene);
 G.city = city;
 const rng = makeRng(20261119);
 
-// Cars: parked + traffic + player-driven (all in G.cars).
+// Cars: parked and traffic, all tracked in G.cars.
 G.cars = [];
 G.parkedCars = spawnParkedCars(rng, 26);
 G.trafficCars = spawnTrafficCars(rng, 22);
@@ -135,23 +241,27 @@ for (const c of [...G.parkedCars, ...G.trafficCars]) {
   G.cars.push(c);
 }
 
-// Pedestrians — dense enough that the sidewalks read as lived-in.
+// Pedestrians, dense enough that the sidewalks read as lived-in.
 G.peds = [];
 for (let i = 0; i < 20; i++) {
   const h = createPedestrian(rng);
   const road = [-252, -180, -108, -36, 36, 108, 180, 252][rng.int(0, 7)];
   const ped = {
     humanoid: h,
-    x: rng.range(-280, 280), z: road + (rng.chance(0.5) ? 8 : -8),
-    heading: rng.range(0, TAU), phase: rng.range(0, 6),
-    speed: rng.range(1, 1.8), fleeT: 0, road,
+    x: rng.range(-280, 280),
+    z: road + (rng.chance(0.5) ? 8 : -8),
+    heading: rng.range(0, TAU),
+    phase: rng.range(0, 6),
+    speed: rng.range(1, 1.8),
+    fleeT: 0,
+    road,
   };
   h.group.position.set(ped.x, 0, ped.z);
   scene.add(h.group);
   G.peds.push(ped);
 }
 
-// Protagonists: active + companion.
+// The two protagonists: the active one and the companion.
 const humanoids = [createProtagonist(0), createProtagonist(1)];
 G.player.humanoid = humanoids[0];
 G.companion.humanoid = humanoids[1];
@@ -160,7 +270,7 @@ scene.add(humanoids[1].group);
 humanoids[0].group.position.set(G.player.x, 0, G.player.z);
 humanoids[1].group.position.set(G.companion.x, 0, G.companion.z);
 
-// Muzzle flash mesh (hidden until firing).
+// Muzzle flash mesh, hidden until a shot is fired.
 const flash = new THREE.Mesh(
   new THREE.SphereGeometry(0.22, 8, 6),
   new THREE.MeshBasicMaterial({ color: 0xffe08a }),
@@ -169,11 +279,19 @@ flash.visible = false;
 scene.add(flash);
 G.flash = flash;
 
-// HUD.
+// The HUD overlay.
 G.hud = createHud(G);
 
-// ---------------- collision ----------------
-/** Push a circle (x, z, r) out of building colliders. Returns corrected [x, z]. */
+// ------------------------------------------------------------------
+// Collision. Buildings are axis-aligned boxes; collideCircle pushes
+// a circle out of them, pointBlocked tests a point against them.
+// ------------------------------------------------------------------
+
+/**
+ * Push a circle at (x, z) with radius r out of the building
+ * colliders. Returns the corrected [x, z]. The world bounds and the
+ * bay are also enforced: the water is not walkable.
+ */
 function collideCircle(x, z, r) {
   for (const c of city.colliders) {
     const cx = clamp(x, c.x0, c.x1);
@@ -184,7 +302,10 @@ function collideCircle(x, z, r) {
     if (d2 >= r * r) continue;
     if (d2 < 1e-6) {
       // Inside the box: push out along the smallest penetration axis.
-      const pl = x - c.x0, pr = c.x1 - x, pt = z - c.z0, pb = c.z1 - z;
+      const pl = x - c.x0;
+      const pr = c.x1 - x;
+      const pt = z - c.z0;
+      const pb = c.z1 - z;
       const m = Math.min(pl, pr, pt, pb);
       if (m === pl) x = c.x0 - r;
       else if (m === pr) x = c.x1 + r;
@@ -197,33 +318,45 @@ function collideCircle(x, z, r) {
     x += dx * push;
     z += dz * push;
   }
-  // World bounds + water: the bay is not walkable.
   x = clamp(x, -300, 300);
   z = clamp(z, -300, 300);
   return [x, z];
 }
 
-/** Is the point (x, z) inside any building collider? */
+/** Is the point (x, z) inside any building collider (with margin r)? */
 function pointBlocked(x, z, r = 0.5) {
   for (const c of city.colliders) {
-    if (x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r) return true;
+    if (x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r) {
+      return true;
+    }
   }
   return false;
 }
 
-// ---------------- input ----------------
+// ------------------------------------------------------------------
+// Input. Keys are tracked in G.keys; presses are handled once per
+// keydown (not per repeat). The pointer lock drives the camera.
+// ------------------------------------------------------------------
 const KEYMAP = {
-  KeyW: 'fwd', ArrowUp: 'fwd',
-  KeyS: 'back', ArrowDown: 'back',
-  KeyA: 'left', ArrowLeft: 'left',
-  KeyD: 'right', ArrowRight: 'right',
-  ShiftLeft: 'sprint', ShiftRight: 'sprint',
+  KeyW: 'fwd',
+  ArrowUp: 'fwd',
+  KeyS: 'back',
+  ArrowDown: 'back',
+  KeyA: 'left',
+  ArrowLeft: 'left',
+  KeyD: 'right',
+  ArrowRight: 'right',
+  ShiftLeft: 'sprint',
+  ShiftRight: 'sprint',
   Space: 'jump',
 };
+
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   G.keys[e.code] = true;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) {
+    e.preventDefault();
+  }
   handleKeyPress(e.code);
 });
 window.addEventListener('keyup', (e) => {
@@ -260,11 +393,14 @@ window.addEventListener('mouseup', (e) => {
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+/** One key press: routes by screen, then by open UI, then by key. */
 function handleKeyPress(code) {
+  // Title screen: Enter starts a new game.
   if (G.screen === 'start') {
     if (code === 'Enter') startGame(false);
     return;
   }
+  // End screens: Enter continues.
   if (G.screen === 'wasted' || G.screen === 'busted') {
     if (code === 'Enter') {
       G.hud.hideEndScreen();
@@ -279,19 +415,20 @@ function handleKeyPress(code) {
     }
     return;
   }
+  // Pause screen: P or Esc resumes.
   if (G.screen === 'pause') {
     if (code === 'KeyP' || code === 'Escape') resumeGame();
     return;
   }
   if (G.screen !== 'play') return;
 
-  // Full-screen map open: only M / Esc close it.
+  // Full-screen map open: only M or Esc closes it.
   if (G.hud.mapOpen) {
     if (code === 'KeyM' || code === 'Escape') G.hud.toggleMap();
     return;
   }
 
-  // Menu navigation.
+  // A shop menu is open: arrows move, Enter buys, Esc closes.
   if (G.menu) {
     if (code === 'ArrowUp' || code === 'KeyW') G.hud.menuMove(-1);
     else if (code === 'ArrowDown' || code === 'KeyS') G.hud.menuMove(1);
@@ -299,11 +436,13 @@ function handleKeyPress(code) {
     else if (code === 'Escape') G.hud.closeMenu();
     return;
   }
-  // Dialogue.
+
+  // A mission dialogue is open: E / Enter / Space advances it.
   if (G.mission.dialogue) {
     if (code === 'KeyE' || code === 'Enter' || code === 'Space') advanceDialogue(G);
     return;
   }
+
   switch (code) {
     case 'KeyE':
       interact();
@@ -344,7 +483,10 @@ function handleKeyPress(code) {
     case 'Escape':
       pauseGame();
       break;
-    case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': {
+    case 'Digit1':
+    case 'Digit2':
+    case 'Digit3':
+    case 'Digit4': {
       const id = data.WEAPON_ORDER[Number(code.slice(-1)) - 1];
       if (G.weapons[id]?.owned) {
         G.weapon.current = id;
@@ -359,6 +501,8 @@ function handleKeyPress(code) {
       break;
   }
 }
+
+// Releasing Q closes the weapon wheel.
 window.addEventListener('keyup', (e) => {
   if (e.code === 'KeyQ' && G.wheelOpen) {
     G.wheelOpen = false;
@@ -366,7 +510,11 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
-/** E: dialogue > mission > shop > race > car. */
+/**
+ * E: the interact key. Priority: dialogue, then the mission, then a
+ * shop, then a race start, then the mission-giver marker, then
+ * entering or exiting a car.
+ */
 function interact() {
   const p = G.player;
   if (G.mission.dialogue) {
@@ -391,7 +539,7 @@ function interact() {
       }
     }
   }
-  // Car enter / exit.
+  // Car enter or exit.
   if (p.car) {
     exitCar();
   } else {
@@ -399,6 +547,7 @@ function interact() {
   }
 }
 
+/** Walk to the nearest car and get in (a 0.5s door animation). */
 function enterNearestCar() {
   const p = G.player;
   if (G.enterAnim) return;
@@ -421,7 +570,10 @@ function enterNearestCar() {
       humanoid: h,
       x: best.x - Math.sin(best.heading) * 3,
       z: best.z + Math.cos(best.heading) * 3,
-      heading: best.heading, phase: 0, speed: 1.5, fleeT: 8,
+      heading: best.heading,
+      phase: 0,
+      speed: 1.5,
+      fleeT: 8,
       road: best.x,
     };
     h.group.position.set(driver.x, 0, driver.z);
@@ -432,17 +584,21 @@ function enterNearestCar() {
     G.notice = 'You jacked a ' + best.spec.name + '!';
     G.noticeT = 2;
   }
-  // Walk to the door (0.5s), then get in; the camera swings to chase cam.
+  // Walk to the door (0.5s), then get in; the camera swings to chase.
   const side = 2.6;
   G.enterAnim = {
-    car: best, t: 0, jacked,
-    fromX: p.x, fromZ: p.z,
+    car: best,
+    t: 0,
+    jacked,
+    fromX: p.x,
+    fromZ: p.z,
     doorX: best.x - Math.sin(best.heading) * side,
     doorZ: best.z + Math.cos(best.heading) * side,
   };
   G.audio.sfx('door');
 }
 
+/** Step out of the car onto the sidewalk. */
 function exitCar() {
   const p = G.player;
   const car = p.car;
@@ -461,6 +617,7 @@ function exitCar() {
   G.police.knows.vehicle = false;
 }
 
+/** Reload the current weapon from the reserve into the magazine. */
 function reloadWeapon() {
   const id = G.weapon.current;
   const st = G.weapons[id];
@@ -474,13 +631,19 @@ function reloadWeapon() {
   G.audio.sfx('click');
 }
 
+/**
+ * Switch protagonists (Tab). The two humanoids swap places: the
+ * companion takes the active one's spot, and the active one moves to
+ * where the companion was. The outfit follows the protagonist, not
+ * the body.
+ */
 function switchProtagonist() {
   const other = 1 - G.protagonistIndex;
-  // Swap the two humanoids: the companion takes the active one's place.
   const activeH = G.player.humanoid;
   const otherH = G.companion.humanoid;
-  // The other protagonist is standing where the companion was; swap them.
-  const px = G.player.x, pz = G.player.z, ph = G.player.heading;
+  const px = G.player.x;
+  const pz = G.player.z;
+  const ph = G.player.heading;
   G.player.x = G.companion.x;
   G.player.z = G.companion.z;
   G.player.heading = G.companion.heading;
@@ -491,13 +654,17 @@ function switchProtagonist() {
   G.companion.humanoid = activeH;
   G.protagonistIndex = other;
   G.protagonist = data.PROTAGONISTS[other];
-  // Outfit follows the protagonist, not the body.
   G.player.humanoid.setOutfit(G.player.outfit);
   G.notice = 'Now playing: ' + G.protagonist.name + ' — ' + G.protagonist.abilityName + ' (X)';
   G.noticeT = 3;
   G.audio.sfx('pickup');
 }
 
+/**
+ * Special ability (X): Rae's Focus Drive slows time while driving,
+ * Juno's Deadeye slows time while aiming on foot. 4 seconds of
+ * slow-mo, then a 20 second cooldown.
+ */
 function useAbility() {
   if (G.slowmoCooldown > 0 || G.slowmoT > 0) return;
   const p = G.protagonist;
@@ -515,10 +682,12 @@ function useAbility() {
   G.noticeT = 2.5;
 }
 
-/** Fire the current weapon toward the crosshair.
- *  The camera ray finds the aim point (an enemy, or far downrange);
- *  the shot itself leaves the muzzle toward that point, so the
- *  crosshair always means what it points at. */
+/**
+ * Fire the current weapon toward the crosshair. The camera ray finds
+ * the aim point (an enemy, or far downrange); the shot itself leaves
+ * the muzzle toward that point, so the crosshair always means what
+ * it points at.
+ */
 function tryShoot() {
   const p = G.player;
   if (G.screen !== 'play' || p.car || G.menu || G.mission.dialogue) return;
@@ -546,7 +715,7 @@ function lockPointer() {
     const r = canvas.requestPointerLock?.();
     if (r && r.catch) r.catch(() => {});
   } catch {
-    /* ignore */
+    /* ignore — no pointer lock in headless mode */
   }
 }
 
@@ -568,14 +737,19 @@ function spawnOwnedCar(G) {
   syncCarMesh(car);
 }
 
-// ---------------- game flow ----------------
+// ------------------------------------------------------------------
+// Game flow: new game / continue, pause / resume, and the menu
+// buttons that drive them.
+// ------------------------------------------------------------------
+
+/** Start a game: from a save, or a fresh run from the title screen. */
 function startGame(fromSave) {
   G.audio.unlock();
   if (fromSave) {
     const d = G.save.loadGame();
     if (d) {
       G.save.applySave(G, d);
-      // Re-apply protagonist + outfit meshes.
+      // Re-apply the protagonist and outfit meshes after the load.
       const h = humanoids[G.protagonistIndex];
       const other = humanoids[1 - G.protagonistIndex];
       G.player.humanoid = h;
@@ -604,13 +778,14 @@ function startGame(fromSave) {
   G.hud.hidePause();
   G.hud.hideEndScreen();
   G.hud.hideComplete();
-  // First mission: briefing opens shortly after play starts.
+  // The first mission's briefing opens shortly after play starts.
   if (!G.mission.started && !G.mission.done) {
     G.mission.nextT = 1.2;
   }
   lockPointer();
 }
 
+/** Pause: freeze play, autosave, release the pointer, show the menu. */
 function pauseGame() {
   if (G.screen !== 'play') return;
   G.screen = 'pause';
@@ -619,12 +794,14 @@ function pauseGame() {
   G.hud.showPause();
 }
 
+/** Resume from pause. */
 function resumeGame() {
   G.screen = 'play';
   G.hud.hidePause();
   lockPointer();
 }
 
+// Title, pause, end and complete screen buttons.
 document.getElementById('btn-new').addEventListener('click', () => startGame(false));
 document.getElementById('btn-continue').addEventListener('click', () => startGame(true));
 document.getElementById('btn-resume').addEventListener('click', resumeGame);
@@ -648,13 +825,17 @@ document.getElementById('btn-free').addEventListener('click', () => {
   G.screen = 'play';
 });
 
-// ---------------- per-frame updates ----------------
+// ------------------------------------------------------------------
+// Per-frame updates.
+// ------------------------------------------------------------------
 const _v = new THREE.Vector3();
 
+/** Player movement: the car entry animation, driving, or on foot. */
 function updatePlayer(dt) {
   const p = G.player;
   if (p.dead) return;
   const k = G.keys;
+
   // Vehicle entry animation: walk to the door, then get in.
   if (G.enterAnim) {
     const a = G.enterAnim;
@@ -678,6 +859,8 @@ function updatePlayer(dt) {
     }
     return;
   }
+
+  // Driving: hand the input to the car, then handle collisions.
   if (p.car) {
     const car = p.car;
     const input = {
@@ -690,9 +873,10 @@ function updatePlayer(dt) {
       dt,
       slowmo: G.slowmoT > 0,
     };
-    const px = car.x, pz = car.z;
+    const px = car.x;
+    const pz = car.z;
     drivePlayerCar(car, input);
-    // Building collision: revert + damage on impact.
+    // Building collision: revert the move and damage on impact.
     if (pointBlocked(car.x + Math.cos(car.heading) * 2.2, car.z + Math.sin(car.heading) * 2.2, 1)) {
       car.x = px;
       car.z = pz;
@@ -706,7 +890,7 @@ function updatePlayer(dt) {
     }
     car.x = clamp(car.x, -298, 298);
     car.z = clamp(car.z, -298, 298);
-    // Traffic collision: gentle push-back.
+    // Traffic collision: a gentle push-back.
     for (const other of G.cars) {
       if (other === car || other.driver === 'player') continue;
       const d = dist2(car.x, car.z, other.x, other.z);
@@ -724,7 +908,7 @@ function updatePlayer(dt) {
     p.speed = car.speed;
     syncCarMesh(car);
     G.audio.setEngine(true, Math.abs(car.speed) / 48);
-    // Speeding past police at 3+ stars while wanted adds a little heat.
+    // Speeding past the police while wanted adds a little heat.
     if (Math.abs(car.speed) > 30 && G.police.level >= 1 && Math.random() < dt * 0.2) {
       G.police.crime('speeding');
     }
@@ -732,11 +916,14 @@ function updatePlayer(dt) {
   }
   G.audio.setEngine(false, 0);
 
-  // On foot: camera-relative movement.
+  // On foot: camera-relative movement (W is where the camera looks).
   const yaw = G.camera.yaw;
-  const fx = Math.cos(yaw), fz = Math.sin(yaw);
-  const rx = -fz, rz = fx;
-  let mx = 0, mz = 0;
+  const fx = Math.cos(yaw);
+  const fz = Math.sin(yaw);
+  const rx = -fz;
+  const rz = fx;
+  let mx = 0;
+  let mz = 0;
   if (k.KeyW || k.ArrowUp) { mx += fx; mz += fz; }
   if (k.KeyS || k.ArrowDown) { mx -= fx; mz -= fz; }
   if (k.KeyD || k.ArrowRight) { mx += rx; mz += rz; }
@@ -775,7 +962,7 @@ function updatePlayer(dt) {
     p.phase += dt * 2;
     p.stamina = clamp((p.stamina ?? 100) + 10 * dt, 0, 100);
   }
-  // Jump / gravity.
+  // Jump and gravity.
   if ((k.Space || k.jump) && p.onGround) {
     p.vy = 7.5;
     p.onGround = false;
@@ -792,15 +979,15 @@ function updatePlayer(dt) {
   }
   p.vx = moving ? mx * speed : 0;
   p.vz = moving ? mz * speed : 0;
-  // Pose + mesh.
+  // Pose and place the mesh. The player mesh hides while driving.
   const aiming = G.aimHeld || (G.mouseDown && G.weapons[G.weapon.current].owned);
   poseHumanoid(p.humanoid, p.phase, moving ? (sprint ? 1 : 0.55) : 0, aiming, !p.onGround);
   p.humanoid.group.position.set(p.x, p.y, p.z);
   p.humanoid.group.rotation.y = Math.PI / 2 - p.heading;
-  // Hide the player mesh while driving (they are inside the car).
   p.humanoid.group.visible = !p.car;
 }
 
+/** The companion follows the player on foot, teleporting if left far behind. */
 function updateCompanion(dt) {
   const c = G.companion;
   const p = G.player;
@@ -829,6 +1016,7 @@ function updateCompanion(dt) {
   c.humanoid.group.visible = c.visible && !p.car;
 }
 
+/** Pedestrians stroll the sidewalks and flee from the player and the heat. */
 function updatePeds(dt) {
   const p = G.player;
   for (const ped of G.peds) {
@@ -858,11 +1046,12 @@ function updatePeds(dt) {
   }
 }
 
+/** Enemies: the dead fall over and sink, the living get their AI tick. */
 function updateEnemies(dt) {
   for (let i = G.combat.enemies.length - 1; i >= 0; i--) {
     const e = G.combat.enemies[i];
     if (e.dead) {
-      // Fall over and fade: sink the body, then remove.
+      // Fall over and fade: sink the body, then remove it.
       e.humanoid.group.rotation.x = -Math.PI / 2;
       e.humanoid.group.position.y -= dt * 0.4;
       if (e.humanoid.group.position.y < -1.5) {
@@ -881,6 +1070,7 @@ function updateEnemies(dt) {
   }
 }
 
+/** Chase camera: distance and height by state, with a shoulder offset when aiming. */
 function updateCamera(dt) {
   const p = G.player;
   const aiming = G.aimHeld && !p.car;
@@ -900,18 +1090,21 @@ function updateCamera(dt) {
     }
   }
   const yaw = G.camera.yaw;
-  const fx = Math.cos(yaw), fz = Math.sin(yaw);
+  const fx = Math.cos(yaw);
+  const fz = Math.sin(yaw);
   // Shoulder-height camera on foot; higher chase cam while driving so
   // the camera looks over the traffic ahead instead of through it.
   const height = p.car
     ? 3.4 + Math.sin(G.camera.pitch) * G.camera.dist * 0.5
-    : aiming ? 1.7 + Math.sin(G.camera.pitch) * G.camera.dist * 0.4
-    : 1.8 + Math.sin(G.camera.pitch) * G.camera.dist * 0.5;
+    : aiming
+      ? 1.7 + Math.sin(G.camera.pitch) * G.camera.dist * 0.4
+      : 1.8 + Math.sin(G.camera.pitch) * G.camera.dist * 0.5;
   const back = Math.cos(G.camera.pitch) * G.camera.dist;
-  // Shoulder offset when aiming: camera sits to the right of the player,
-  // so the character shifts left and the crosshair stays centred.
+  // Shoulder offset when aiming: the camera sits to the right of the
+  // player, so the character shifts left and the crosshair stays centred.
   const shoulder = aiming ? 1.1 : 0;
-  const rx = -fz, rz = fx;
+  const rx = -fz;
+  const rz = fx;
   const cx = p.x - fx * back + rx * shoulder;
   const cz = p.z - fz * back + rz * shoulder;
   const cy = (p.y || 0) + height;
@@ -928,6 +1121,7 @@ function updateCamera(dt) {
   }
 }
 
+/** Tracers fade out over their 0.09s life, then are removed. */
 function updateTracers(dt) {
   for (let i = G.combat.tracers.length - 1; i >= 0; i--) {
     const t = G.combat.tracers[i];
@@ -940,16 +1134,20 @@ function updateTracers(dt) {
   }
 }
 
-// ---------------- main loop ----------------
+// ------------------------------------------------------------------
+// Main loop.
+// ------------------------------------------------------------------
 let lastT = performance.now();
 let autosaveT = 0;
 let radioT = 0;
 let frameCount = 0;
 
+/** One frame: advance the clock, update the world, render. */
 function loop(now) {
   requestAnimationFrame(loop);
-  // Headless SwiftShader runs at a few FPS; the 0.05 cap would make the
-  // self-test crawl at ~0.1x real time, so the test gets a coarser cap.
+  // Headless SwiftShader runs at a few FPS; the 0.05 cap would make
+  // the self-test crawl at ~0.1x real time, so the test gets a
+  // coarser cap.
   const dtCap = SELFTEST ? 0.25 : 0.05;
   let dt = Math.min(dtCap, (now - lastT) / 1000);
   lastT = now;
@@ -991,17 +1189,17 @@ function loop(now) {
     updateRace(G, dt);
     updatePolice(G, dt);
     updatePickups(G, dt);
-    // Wasted: the player died — hospital respawn + end screen.
+    // Wasted: the player died — hospital respawn and the end screen.
     if (G.player.dead && G.screen === 'play') {
       wasted(G);
     }
-    // Traffic.
+    // Traffic cars drive themselves; parked cars just render.
     for (const car of G.trafficCars) {
       updateTrafficCar(car, dt, G.cars, rng);
       syncCarMesh(car);
     }
     for (const car of G.parkedCars) syncCarMesh(car);
-    // Weapon cooldowns.
+    // Weapon cooldowns tick down.
     if (G.combat.fireT > 0) G.combat.fireT -= dt;
     if (G.combat.punchT > 0) G.combat.punchT -= dt;
     // Hold-to-fire for automatic weapons.
@@ -1009,7 +1207,7 @@ function loop(now) {
       const spec = data.WEAPONS[G.weapon.current];
       if (spec.auto && G.combat.fireT <= 0) tryShoot();
     }
-    // Beacon pulse.
+    // The mission / race beacon pulses.
     const beacon = G.mission.beacon || G.race.beacon;
     if (beacon) {
       beacon.userData.pillar.material.opacity = 0.22 + Math.sin(G.time * 4) * 0.1;
@@ -1019,9 +1217,9 @@ function loop(now) {
     for (const m of Object.values(city.shopMarkers)) {
       m.userData.spinLabel.lookAt(camera3.position);
     }
-    // Notices.
+    // Notices fade on their timer.
     if (G.noticeT > 0) G.noticeT -= dt;
-    // Autosave.
+    // Autosave every 30 seconds of play.
     autosaveT += dt;
     if (autosaveT > 30) {
       autosaveT = 0;
@@ -1029,7 +1227,7 @@ function loop(now) {
     }
   }
 
-  // Radio sequencer (real time, not slowed).
+  // The radio sequencer runs on real time, not slowed time.
   radioT += dt;
   if (radioT > 0.28) {
     radioT = 0;
@@ -1043,23 +1241,28 @@ function loop(now) {
   if (SELFTEST) selfTestTick(dt);
 }
 
-// ---------------- boot ----------------
+// ------------------------------------------------------------------
+// Boot.
+// ------------------------------------------------------------------
 G.hud.showStart(G.save.hasSave());
 if (SHOT) {
-  // Staged scene: skip the title screen, build the shot.
+  // Staged scene: skip the title screen and build the shot.
   applyShot(G, SHOT, SEED);
   if (G.screen === 'start') {
-    // 'start' shot keeps the title screen up.
+    // The 'start' shot keeps the title screen up.
   } else {
     G.hud.hideStart();
   }
 }
 requestAnimationFrame(loop);
 
-// ---------------- headless self-test (?selftest=1) ----------------
+// ------------------------------------------------------------------
+// Headless self-test (?selftest=1).
+//
 // Scripted end-to-end checks that drive the real game code (keys, E,
 // shooting, wanted, shops, races, switching, save) and report into
-// #test-results + document.title so headless Chrome can read them.
+// #test-results and document.title so headless Chrome can read them.
+// ------------------------------------------------------------------
 const testResults = [];
 let testStep = 0;
 let testTimer = 0;
@@ -1069,6 +1272,7 @@ let testMark = null;
 let testStepPrev = -1;
 let testEntered = false;
 
+/** Record one check and publish the running tally. */
 function testLog(name, ok, detail) {
   testResults.push({ name, ok: !!ok, detail: detail || '' });
   const el = document.getElementById('test-results');
@@ -1078,14 +1282,21 @@ function testLog(name, ok, detail) {
   document.title = 'SELFTEST:' + testResults.filter((r) => r.ok).length + '/' + testResults.length;
 }
 
+/** Per-frame self-test driver: snapshot positions on step entry, then run the step. */
 function selfTestTick(dt) {
   testTimer += dt;
   const p = G.player;
-  // Snapshot start positions once, when a step is entered (positions
-  // captured every tick would measure a single frame, not the step).
+  // Snapshot the start positions once, when a step is entered.
+  // (Capturing them every tick would measure a single frame, not
+  // the step.)
   if (testStep !== testStepPrev) {
     testStepPrev = testStep;
-    testMark = { px: p.x, pz: p.z, cx: testCar ? testCar.x : 0, cz: testCar ? testCar.z : 0 };
+    testMark = {
+      px: p.x,
+      pz: p.z,
+      cx: testCar ? testCar.x : 0,
+      cz: testCar ? testCar.z : 0,
+    };
   }
   try {
     selfTestStep(dt);
@@ -1097,10 +1308,11 @@ function selfTestTick(dt) {
   }
 }
 
+/** One self-test step. Each case drives the game and logs pass/fail. */
 function selfTestStep(dt) {
   const p = G.player;
   switch (testStep) {
-    case 0: // boot: force play screen
+    case 0: // Boot: force the play screen.
       if (testTimer > 0.5) {
         G.screen = 'play';
         G.hud.hideStart();
@@ -1112,17 +1324,18 @@ function selfTestStep(dt) {
         testTimer = 0;
       }
       break;
-    case 1: { // walk forward
+    case 1: { // Walk forward.
       G.keys.KeyW = true;
       if (testTimer > 1.2) {
         G.keys.KeyW = false;
-        testLog('walk', dist2(testMark.px, testMark.pz, p.x, p.z) > 2, 'moved ' + dist2(testMark.px, testMark.pz, p.x, p.z).toFixed(1) + 'm');
+        testLog('walk', dist2(testMark.px, testMark.pz, p.x, p.z) > 2,
+          'moved ' + dist2(testMark.px, testMark.pz, p.x, p.z).toFixed(1) + 'm');
         testStep = 2;
         testTimer = 0;
       }
       break;
     }
-    case 2: { // jump
+    case 2: { // Jump.
       const y0 = p.y;
       G.keys.Space = true;
       if (testTimer > 0.3) {
@@ -1133,15 +1346,16 @@ function selfTestStep(dt) {
       }
       break;
     }
-    case 3: { // enter nearest parked car (direct entry path: E also routes
-      // through dialogue / shop / race first, which the test must not trip on)
+    case 3: { // Enter the nearest parked car. (The direct entry path:
+      // E also routes through dialogue / shop / race first, which the
+      // test must not trip on.)
       const car = G.parkedCars[0];
       if (!testEntered) {
         p.x = car.x + 3;
         p.z = car.z;
         p.heading = 0;
         G.mission.dialogue = null;
-        enterNearestCar(); // 0.5s walk-to-door animation, then p.car is set
+        enterNearestCar(); // 0.5s walk-to-door, then p.car is set
         testEntered = true;
       }
       if (p.car) {
@@ -1158,7 +1372,7 @@ function selfTestStep(dt) {
       }
       break;
     }
-    case 4: { // drive
+    case 4: { // Drive.
       if (!testCar) {
         testLog('drive', false, 'no car from step 3');
         testStep = 5;
@@ -1169,13 +1383,14 @@ function selfTestStep(dt) {
       if (testTimer > 2) {
         G.keys.KeyW = false;
         const moved = dist2(testMark.cx, testMark.cz, testCar.x, testCar.z);
-        testLog('drive', moved > 10 && Math.abs(testCar.speed) > 3, 'moved ' + moved.toFixed(1) + 'm speed ' + testCar.speed.toFixed(1));
+        testLog('drive', moved > 10 && Math.abs(testCar.speed) > 3,
+          'moved ' + moved.toFixed(1) + 'm speed ' + testCar.speed.toFixed(1));
         testStep = 5;
         testTimer = 0;
       }
       break;
     }
-    case 5: { // exit car
+    case 5: { // Exit the car.
       if (testTimer > 0.3) {
         exitCar();
         testLog('exit-car', !p.car, p.car ? 'still in car' : 'on foot');
@@ -1184,7 +1399,7 @@ function selfTestStep(dt) {
       }
       break;
     }
-    case 6: { // shoot an enemy
+    case 6: { // Shoot an enemy.
       if (!testEnemy) {
         testEnemy = spawnEnemy(scene, 'viper', p.x + 8, p.z, { health: 60 });
         G.combat.enemies.push(testEnemy);
@@ -1207,31 +1422,33 @@ function selfTestStep(dt) {
       }
       break;
     }
-    case 7: { // wanted 3+ -> helicopter
+    case 7: { // Wanted 3+ brings the helicopter.
       addCrime(G, 'kill-cop');
       addCrime(G, 'kill-cop');
       if (testTimer > 4) {
-        testLog('wanted-heli', G.police.level >= 3 && !!G.police.heli, 'stars ' + G.police.level + ' heli ' + !!G.police.heli);
+        testLog('wanted-heli', G.police.level >= 3 && !!G.police.heli,
+          'stars ' + G.police.level + ' heli ' + !!G.police.heli);
         testStep = 8;
         testTimer = 0;
       }
       break;
     }
-    case 8: { // shop menu opens
+    case 8: { // A shop menu opens.
       const shop = data.SHOPS[0];
       const s = data.SPOTS[shop.spot];
       p.x = s.x;
       p.z = s.z;
       if (testTimer > 0.4) {
         G.hud.openMenu(shop.kind, shop.name);
-        testLog('shop', !!(G.menu && G.menu.rows.length > 2), 'rows ' + (G.menu ? G.menu.rows.length : 0));
+        testLog('shop', !!(G.menu && G.menu.rows.length > 2),
+          'rows ' + (G.menu ? G.menu.rows.length : 0));
         G.hud.closeMenu();
         testStep = 9;
         testTimer = 0;
       }
       break;
     }
-    case 9: { // race: start + run the gates (races need a car)
+    case 9: { // Race: start it (races need a car).
       clearWanted(G);
       const race = data.RACES.neon;
       const s = data.SPOTS[race.start];
@@ -1251,7 +1468,7 @@ function selfTestStep(dt) {
       }
       break;
     }
-    case 10: { // teleport the race car through the gates
+    case 10: { // Teleport the race car through the gates.
       const race = data.RACES.neon;
       if (G.race.active && G.race.gate < race.gates.length) {
         const s = data.SPOTS[race.gates[G.race.gate]];
@@ -1270,24 +1487,27 @@ function selfTestStep(dt) {
       }
       break;
     }
-    case 11: { // switch protagonist
+    case 11: { // Switch protagonist.
       const before = G.protagonist.name;
       switchProtagonist();
-      testLog('switch-protagonist', G.protagonist.name !== before, before + ' -> ' + G.protagonist.name);
+      testLog('switch-protagonist', G.protagonist.name !== before,
+        before + ' -> ' + G.protagonist.name);
       testStep = 12;
       testTimer = 0;
       break;
     }
-    case 12: { // save + reload
+    case 12: { // Save and reload.
       G.money = 12345;
       G.save.saveGame(G);
       const loaded = G.save.loadGame();
-      testLog('save-reload', !!loaded && loaded.money === 12345, 'loaded money ' + (loaded ? loaded.money : 'null'));
+      testLog('save-reload', !!loaded && loaded.money === 12345,
+        'loaded money ' + (loaded ? loaded.money : 'null'));
       testStep = 13;
       testTimer = 0;
       break;
     }
-    case 13: { // mission flow: start mission 1, steal step completes in car
+    case 13: { // Mission flow: start mission 1; the steal step
+      // completes once the player is in a car.
       if (!testEntered) {
         startMission(G, 0);
         G.mission.dialogue = null; // briefing dismissed for the test

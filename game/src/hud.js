@@ -1,14 +1,29 @@
-// hud.js — the DOM overlay for Solmar Nights 3D: health/armor bars,
-// 6 wanted stars + police-knowledge icons, money, objective text,
-// crosshair, weapon wheel, dialogue, notices, shop menus, minimap
-// (rotating 2D canvas top-down view), and the start/pause/end screens.
-import { WEAPONS, WEAPON_ORDER, DISTRICTS, SPOTS, SHOPS, RACES } from './data.js';
+// hud.js — the DOM overlay for Solmar Nights 3D (v4).
+//
+// Everything the player sees on top of the 3D view lives here:
+// the health / armor / stamina / Focus bars, the six wanted stars
+// with the police-knowledge icons, money, the objective line, the
+// crosshair, the weapon wheel, dialogue, notices, shop menus, the
+// rotating minimap, and the start / pause / end screens.
+//
+// The overlay is built once by createHud(G) and refreshed every frame
+// by H.update(). DOM writes are kept cheap: only values that changed
+// are written, and the minimap is redrawn on its own canvas.
+import {
+  WEAPONS,
+  WEAPON_ORDER,
+  DISTRICTS,
+  SPOTS,
+  SHOPS,
+  RACES,
+} from './data.js';
 import { districtAt } from './city.js';
 import { fmtMoney, fmtTime, clamp, dist2 } from './util.js';
 import { respectRankTitle } from './respectRanks.js';
 import { nosLevel } from './garageUpgrades.js';
 import { nearbyShop, nearbyRace } from './economy.js';
 
+/** Build the HUD overlay inside #hud and return its handle. */
 export function createHud(G) {
   const root = document.getElementById('hud');
   root.innerHTML = `
@@ -83,14 +98,18 @@ export function createHud(G) {
       <button id="btn-free">KEEP PLAYING (FREE ROAM)</button>
     </div>`;
 
+  // Short helper: fetch an element by id.
   const $ = (id) => document.getElementById(id);
   const minimap = $('minimap');
   const mm = minimap.getContext('2d');
 
   const H = {
-    root, mm, minimap,
+    root,
+    mm,
+    minimap,
     mapOpen: false,
-    /** Toggle the full-screen map (M). */
+
+    /** Toggle the full-screen map (M key). */
     toggleMap() {
       if (H.mapOpen) {
         H.mapOpen = false;
@@ -101,15 +120,23 @@ export function createHud(G) {
         $('hud-map').classList.remove('hidden');
       }
     },
+
+    /** Show the "BUSTED?" progress bar while a cop closes in. */
     setBustProgress(f) {
       $('hud-bust').style.display = f > 0 ? 'block' : 'none';
       $('hud-bust-fill').style.width = Math.round(clamp(f, 0, 1) * 100) + '%';
     },
+
+    /** Brief red flash across the screen when the player is hurt. */
     flashDamage() {
       const el = $('hud-flash');
       el.style.opacity = '0.35';
-      setTimeout(() => { el.style.opacity = '0'; }, 120);
+      setTimeout(() => {
+        el.style.opacity = '0';
+      }, 120);
     },
+
+    /** Show the WASTED / BUSTED end screen with the cash lost. */
     showEndScreen(kind, lost) {
       const t = $('end-title');
       t.textContent = kind === 'busted' ? 'BUSTED' : 'WASTED';
@@ -118,25 +145,34 @@ export function createHud(G) {
         : 'You blacked out and woke up at Solmar General. Hospital bill: ' + fmtMoney(lost) + '.';
       $('screen-end').classList.remove('hidden');
     },
+
     hideEndScreen() {
       $('screen-end').classList.add('hidden');
     },
+
+    /** Show the story-complete screen with the final stats. */
     showComplete() {
       $('complete-stats').innerHTML =
         'Missions: ' + G.missionsDone + ' · Kills: ' + G.stats.kills +
         ' · Races won: ' + G.stats.racesWon + ' · Cash: ' + fmtMoney(G.money);
       $('screen-complete').classList.remove('hidden');
     },
+
     hideComplete() {
       $('screen-complete').classList.add('hidden');
     },
+
+    /** Show the title screen; CONTINUE only appears with a save. */
     showStart(hasSave) {
       $('screen-start').classList.remove('hidden');
       $('btn-continue').style.display = hasSave ? 'inline-block' : 'none';
     },
+
     hideStart() {
       $('screen-start').classList.add('hidden');
     },
+
+    /** Show the pause screen with the current run stats. */
     showPause() {
       const s = G.stats;
       $('pause-stats').innerHTML =
@@ -145,18 +181,29 @@ export function createHud(G) {
         ' · Respect: ' + respectRankTitle(G) + ' · Radio: ' + G.audio.radioStationName();
       $('screen-pause').classList.remove('hidden');
     },
+
     hidePause() {
       $('screen-pause').classList.add('hidden');
     },
+
+    /** Open a shop menu of the given kind. */
     openMenu(kind, title) {
-      G.menu = { kind, title: title || shopTitle(kind), sel: 0, rows: G.economy.shopMenu(G, kind) };
+      G.menu = {
+        kind,
+        title: title || shopTitle(kind),
+        sel: 0,
+        rows: G.economy.shopMenu(G, kind),
+      };
       renderMenu(G);
     },
+
     closeMenu() {
       G.menu = null;
       $('hud-menu').innerHTML = '';
       $('hud-menu').classList.remove('open');
     },
+
+    /** Move the shop menu selection (wraps around). */
     menuMove(d) {
       if (!G.menu) return;
       const rows = G.menu.rows;
@@ -164,20 +211,25 @@ export function createHud(G) {
       G.menu.sel = (G.menu.sel + d + rows.length) % rows.length;
       renderMenu(G);
     },
+
+    /** Buy the selected shop row, then refresh the menu. */
     menuChoose() {
       if (!G.menu) return;
       const row = G.menu.rows[G.menu.sel];
       if (!row) return;
       const ok = row.action();
-      if (ok) {
-        // Refresh the menu (prices/stock may have changed).
-        if (G.menu) {
-          G.menu.rows = G.economy.shopMenu(G, G.menu.kind);
-          renderMenu(G);
-        }
+      if (ok && G.menu) {
+        // Prices and stock may have changed: rebuild the rows.
+        G.menu.rows = G.economy.shopMenu(G, G.menu.kind);
+        renderMenu(G);
       }
     },
-    /** Open the weapon wheel overlay (radial: weapons around a circle). */
+
+    /**
+     * Open the weapon wheel overlay: the owned weapons arranged
+     * around a circle, with the current one highlighted and the
+     * locked ones greyed out with their price.
+     */
     showWheel() {
       const el = $('hud-wheel');
       let html = '<div class="wheel-title">WEAPONS</div><div class="wheel-circle">';
@@ -196,17 +248,20 @@ export function createHud(G) {
       el.innerHTML = html;
       el.classList.add('open');
     },
+
     hideWheel() {
       $('hud-wheel').classList.remove('open');
       $('hud-wheel').innerHTML = '';
     },
   };
 
+  /** Display name for a shop kind (falls back to the kind itself). */
   function shopTitle(kind) {
     const s = SHOPS.find((x) => x.id === kind || x.kind === kind);
     return s ? s.name : kind;
   }
 
+  /** Render the open shop menu into #hud-menu. */
   function renderMenu(G2) {
     const el = $('hud-menu');
     const m = G2.menu;
@@ -227,6 +282,7 @@ export function createHud(G) {
     el.classList.add('open');
   }
 
+  /** Small stat bars shown beside some shop rows (e.g. car stats). */
   function statBarsHtml(bars) {
     let out = '';
     for (const [name, v] of Object.entries(bars)) {
@@ -236,12 +292,15 @@ export function createHud(G) {
     return out;
   }
 
-  /** Per-frame HUD refresh (cheap DOM writes only when changed). */
+  /** Per-frame HUD refresh. Only writes DOM values that changed. */
   H.update = function update() {
     const p = G.player;
-    // Top-left vitals: health / stamina / Focus ability / armor.
-    const focus = G.slowmoT > 0 ? (G.slowmoT / 4) * 100
-      : G.slowmoCooldown > 0 ? (1 - G.slowmoCooldown / 20) * 100 : 100;
+    // Top-left vitals: health, stamina, Focus ability, armor.
+    const focus = G.slowmoT > 0
+      ? (G.slowmoT / 4) * 100
+      : G.slowmoCooldown > 0
+        ? (1 - G.slowmoCooldown / 20) * 100
+        : 100;
     $('bar-health').style.width = clamp(p.health, 0, 100) + '%';
     $('bar-stamina').style.width = clamp(p.stamina ?? 100, 0, 100) + '%';
     $('bar-focus').style.width = clamp(focus, 0, 100) + '%';
@@ -250,24 +309,26 @@ export function createHud(G) {
     $('bar-armor').parentElement.style.display = p.armor > 0 ? 'block' : 'none';
     const d = districtAt(p.x, p.z);
     $('hud-district').textContent = d.name + ' — ' + G.clockText;
-    // Top-right: ammo + cash + wanted stars + police-knowledge icons.
+    // Top-right: ammo, cash, wanted stars, police-knowledge icons.
     const w = WEAPONS[G.weapon.current];
     const st = G.weapons[G.weapon.current];
-    $('hud-weapon').textContent = st.owned ? w.name + '  ' + st.mag + ' / ' + st.reserve : w.name + ' — not owned';
+    $('hud-weapon').textContent = st.owned
+      ? w.name + '  ' + st.mag + ' / ' + st.reserve
+      : w.name + ' — not owned';
     $('hud-money').textContent = fmtMoney(G.money) + '  ·  ' + G.protagonist.name;
-    // Stars.
+    // Stars: filled for the current level, hollow above it.
     let stars = '';
     for (let i = 0; i < 6; i++) stars += i < G.police.level ? '★' : '☆';
     $('hud-stars').textContent = stars;
     $('hud-stars').style.color = G.police.level >= 4 ? '#ff5040' : '#ffd25f';
-    // Police-knowledge icons: face / clothing / vehicle.
+    // Police-knowledge icons: face / clothing / vehicle. Dim when unknown.
     const k = G.police.knows;
     $('hud-knows').innerHTML =
       '<span title="They know your face" style="opacity:' + (k.face ? 1 : 0.25) + '">👤</span>' +
       '<span title="They know your clothes" style="opacity:' + (k.clothing ? 1 : 0.25) + '">👕</span>' +
       '<span title="They know your vehicle" style="opacity:' + (k.vehicle ? 1 : 0.25) + '">🚗</span>';
     $('hud-respect').textContent = 'Respect: ' + respectRankTitle(G);
-    // Bottom-right: action prompt + radio + speed + NOS.
+    // Bottom-right: action prompt, radio station, speed, NOS.
     $('hud-prompt').textContent = actionPrompt(G);
     $('hud-radio').textContent = '♪ ' + G.audio.radioStationName();
     $('hud-speed').textContent = p.car
@@ -278,12 +339,13 @@ export function createHud(G) {
     if (nos > 0) $('bar-nos').style.width = nos + '%';
     $('hud-crosshair').style.display =
       (G.screen === 'play' && !p.car && G.weapons[G.weapon.current].owned) ? 'block' : 'none';
-    // Objective.
+    // Objective line: race gates, the current mission step, or a hint.
     const step = G.missions.currentStep(G);
     let obj = '';
     if (G.race.active) {
       const race = RACES[G.race.id];
-      obj = '🏁 ' + race.name + ' gate ' + (G.race.gate + 1) + '/' + race.gates.length + ' · ' + G.race.t.toFixed(1) + 's (par ' + G.race.par + 's)';
+      obj = '🏁 ' + race.name + ' gate ' + (G.race.gate + 1) + '/' + race.gates.length +
+        ' · ' + G.race.t.toFixed(1) + 's (par ' + G.race.par + 's)';
     } else if (G.mission.started && step) {
       obj = '◆ ' + G.missions.currentMission(G).title + ' — ' + step.text;
       const t = G.missions.missionTarget(G);
@@ -294,7 +356,7 @@ export function createHud(G) {
       obj = '◆ Story complete — free roam Solmar City.';
     }
     $('hud-objective').textContent = obj;
-    // Notice.
+    // Notice: fades out once its timer expires.
     const n = $('hud-notice');
     if (G.noticeT > 0) {
       n.textContent = G.notice;
@@ -302,11 +364,11 @@ export function createHud(G) {
     } else {
       n.style.opacity = '0';
     }
-    // Dialogue.
+    // Dialogue box while a mission briefing is open.
     const dlg = $('hud-dialogue');
     if (G.mission.dialogue) {
-      const d = G.mission.dialogue;
-      dlg.innerHTML = '<div class="dlg-line">' + d.lines[d.i] + '</div>' +
+      const dd = G.mission.dialogue;
+      dlg.innerHTML = '<div class="dlg-line">' + dd.lines[dd.i] + '</div>' +
         '<div class="dlg-hint">E / click: continue</div>';
       dlg.style.display = 'block';
     } else {
@@ -315,7 +377,10 @@ export function createHud(G) {
     drawMinimap(G);
   };
 
-  /** Contextual action prompt for the bottom-right corner (E hints). */
+  /**
+   * Contextual action prompt for the bottom-right corner: what E does
+   * right now. Priority: car exit, shop, race, mission target, car.
+   */
   function actionPrompt(G2) {
     if (G2.menu || G2.mission.dialogue || G2.screen !== 'play') return '';
     const p = G2.player;
@@ -335,7 +400,10 @@ export function createHud(G) {
     for (const car of G2.cars) {
       if (car.driver === 'player') continue;
       const d = dist2(car.x, car.z, p.x, p.z);
-      if (d < bestD) { best = car; bestD = d; }
+      if (d < bestD) {
+        best = car;
+        bestD = d;
+      }
     }
     if (best) {
       return best.driver === 'traffic'
@@ -345,12 +413,15 @@ export function createHud(G) {
     return '';
   }
 
-  /** Rotating minimap: north-up is wrong here — the map rotates so the
-   *  camera heading is up, with the player arrow fixed at the centre. */
+  /**
+   * Rotating minimap: the map turns so the camera heading points up,
+   * with the player arrow fixed at the centre. North-up would be
+   * wrong here — the camera heading is what the player steers by.
+   */
   function drawMinimap(G2) {
     const p = G2.player;
     const S = 170;
-    const scale = S / 260; // show ~260m across
+    const scale = S / 260; // show roughly 260m across
     mm.save();
     mm.clearRect(0, 0, S, S);
     mm.beginPath();
@@ -362,31 +433,31 @@ export function createHud(G) {
     mm.translate(S / 2, S / 2);
     mm.rotate(-G2.camera.heading - Math.PI / 2);
     mm.translate(-p.x * scale, -p.z * scale);
-    // Water + beach (south).
+    // Water and beach to the south.
     mm.fillStyle = '#2a6f9e';
     mm.fillRect(-450 * scale, 340 * scale, 900 * scale, 300 * scale);
     mm.fillStyle = '#e0c890';
     mm.fillRect(-450 * scale, 300 * scale, 900 * scale, 40 * scale);
-    // Districts.
+    // Districts (flat colours by kind).
     for (const d of DISTRICTS) {
       const b = d.bounds;
       mm.fillStyle = d.id === 'neon' ? '#3a2d5c' : d.id === 'plaza' ? '#8a97a0' : '#5a6a52';
       mm.fillRect(b[0] * scale, b[2] * scale, (b[1] - b[0]) * scale, (b[3] - b[2]) * scale);
     }
-    // Roads.
+    // Roads: the grid lines.
     mm.fillStyle = '#2e3138';
     for (const r of [-252, -180, -108, -36, 36, 108, 180, 252]) {
       mm.fillRect(r * scale - 6 * scale, -312 * scale, 12 * scale, 624 * scale);
       mm.fillRect(-312 * scale, r * scale - 6 * scale, 624 * scale, 12 * scale);
     }
-    // Buildings (approx: block centres as dots).
+    // Buildings, approximated as block-centre dots.
     mm.fillStyle = '#c8c8c8';
     for (const bx of [-216, -144, -72, 0, 72, 144, 216]) {
       for (const bz of [-216, -144, -72, 0, 72, 144, 216]) {
         mm.fillRect((bx - 12) * scale, (bz - 12) * scale, 24 * scale, 24 * scale);
       }
     }
-    // Shops.
+    // Shops as coloured dots.
     for (const shop of SHOPS) {
       const s = SPOTS[shop.spot];
       mm.fillStyle = '#' + shop.color.toString(16).padStart(6, '0');
@@ -394,14 +465,16 @@ export function createHud(G) {
       mm.arc(s.x * scale, s.z * scale, 5, 0, Math.PI * 2);
       mm.fill();
     }
-    // Race starts.
+    // Race starts as blue squares.
     mm.fillStyle = '#40d0ff';
     for (const race of Object.values(RACES)) {
       const s = SPOTS[race.start];
       mm.fillRect(s.x * scale - 4, s.z * scale - 4, 8, 8);
     }
-    // Mission / race target.
-    const t = G2.race.active ? SPOTS[RACES[G2.race.id].gates[G2.race.gate]] : G2.missions.missionTarget(G2);
+    // Mission / race target: a gold ring.
+    const t = G2.race.active
+      ? SPOTS[RACES[G2.race.id].gates[G2.race.gate]]
+      : G2.missions.missionTarget(G2);
     if (t && (G2.mission.started || G2.race.active)) {
       mm.fillStyle = '#ffd25f';
       mm.beginPath();
@@ -413,7 +486,7 @@ export function createHud(G) {
       mm.arc(t.x * scale, t.z * scale, 11, 0, Math.PI * 2);
       mm.stroke();
     }
-    // Pink GPS route to the objective, following the road grid (L-shape).
+    // Pink GPS route to the objective, following the road grid.
     const route = gpsRoute(G2);
     if (route) {
       mm.lineJoin = 'round';
@@ -421,15 +494,21 @@ export function createHud(G) {
       mm.strokeStyle = '#ffffff';
       mm.lineWidth = 5;
       mm.beginPath();
-      route.forEach(([x, z], i) => { if (i === 0) mm.moveTo(x * scale, z * scale); else mm.lineTo(x * scale, z * scale); });
+      route.forEach(([x, z], i) => {
+        if (i === 0) mm.moveTo(x * scale, z * scale);
+        else mm.lineTo(x * scale, z * scale);
+      });
       mm.stroke();
       mm.strokeStyle = '#ff4fd8';
       mm.lineWidth = 3;
       mm.beginPath();
-      route.forEach(([x, z], i) => { if (i === 0) mm.moveTo(x * scale, z * scale); else mm.lineTo(x * scale, z * scale); });
+      route.forEach(([x, z], i) => {
+        if (i === 0) mm.moveTo(x * scale, z * scale);
+        else mm.lineTo(x * scale, z * scale);
+      });
       mm.stroke();
     }
-    // Police dots.
+    // Police dots, blue; the helicopter gets a bigger one.
     mm.fillStyle = '#4080ff';
     for (const c of G2.police.cruisers) {
       mm.beginPath();
@@ -441,12 +520,12 @@ export function createHud(G) {
       mm.arc(G2.police.heli.x * scale, G2.police.heli.z * scale, 5, 0, Math.PI * 2);
       mm.fill();
     }
-    // Traffic.
+    // Traffic as pale squares.
     mm.fillStyle = '#dddddd';
     for (const c of G2.trafficCars) {
       mm.fillRect(c.x * scale - 2, c.z * scale - 2, 4, 4);
     }
-    // Player arrow (drawn unrotated: reset rotation first).
+    // Player arrow, drawn unrotated at the centre.
     mm.restore();
     mm.save();
     mm.translate(S / 2, S / 2);
@@ -459,7 +538,7 @@ export function createHud(G) {
     mm.closePath();
     mm.fill();
     mm.restore();
-    // North tick.
+    // North tick at the top edge.
     mm.save();
     mm.translate(S / 2, S / 2);
     mm.rotate(-G2.camera.heading - Math.PI / 2);
@@ -470,11 +549,15 @@ export function createHud(G) {
     mm.restore();
   }
 
-  /** Pink GPS route waypoints (world coords) from the player to the
-   *  objective, routed along the road grid: onto the nearest vertical
-   *  road, across on the target's horizontal road, then to the target. */
+  /**
+   * Pink GPS route waypoints (world coords) from the player to the
+   * objective, routed along the road grid: onto the nearest vertical
+   * road, across on the target's horizontal road, then to the target.
+   */
   function gpsRoute(G2) {
-    const t = G2.race.active ? SPOTS[RACES[G2.race.id].gates[G2.race.gate]] : G2.missions.missionTarget(G2);
+    const t = G2.race.active
+      ? SPOTS[RACES[G2.race.id].gates[G2.race.gate]]
+      : G2.missions.missionTarget(G2);
     if (!t || (!G2.mission.started && !G2.race.active)) return null;
     const p = G2.player;
     const roads = [-252, -180, -108, -36, 36, 108, 180, 252];
@@ -485,23 +568,26 @@ export function createHud(G) {
     return [[p.x, p.z], [rx, p.z], [rx, rz], [tx, rz], [t.x, t.z]];
   }
 
-  /** Full-screen map (M): coastline, roads, districts, shops, race
-   *  starts, the pink GPS route and the player — north-up, no rotation. */
+  /**
+   * Full-screen map (M key): coastline, roads, districts, shops,
+   * race starts, the pink GPS route and the player — north-up, no
+   * rotation, with a legend along the bottom.
+   */
   function drawFullMap(G2) {
     const c = $('mapcanvas');
     const ctx = c.getContext('2d');
     const S = 560;
-    const scale = S / 660; // world -330..330
+    const scale = S / 660; // world -330..330 maps onto the canvas
     const X = (x) => (x + 330) * scale;
     const Z = (z) => (z + 330) * scale;
     ctx.fillStyle = '#10141a';
     ctx.fillRect(0, 0, S, S);
-    // Bay water + beach (south).
+    // Bay water and beach along the south edge.
     ctx.fillStyle = '#2a6f9e';
     ctx.fillRect(0, Z(300), S, S - Z(300));
     ctx.fillStyle = '#e0c890';
     ctx.fillRect(0, Z(300), S, 40 * scale);
-    // Districts + names.
+    // Districts with their names.
     for (const d of DISTRICTS) {
       const b = d.bounds;
       ctx.fillStyle = d.id === 'neon' ? '#3a2d5c' : d.id === 'plaza' ? '#5a646c' : '#3d4a38';
@@ -531,8 +617,10 @@ export function createHud(G) {
       const s = SPOTS[race.start];
       ctx.fillRect(X(s.x) - 4, Z(s.z) - 4, 8, 8);
     }
-    // Pink GPS route + objective marker.
-    const t = G2.race.active ? SPOTS[RACES[G2.race.id].gates[G2.race.gate]] : G2.missions.missionTarget(G2);
+    // Pink GPS route and the objective marker.
+    const t = G2.race.active
+      ? SPOTS[RACES[G2.race.id].gates[G2.race.gate]]
+      : G2.missions.missionTarget(G2);
     if (t && (G2.mission.started || G2.race.active)) {
       const route = gpsRoute(G2);
       if (route) {
@@ -540,7 +628,10 @@ export function createHud(G) {
         ctx.lineWidth = 3;
         ctx.lineJoin = 'round';
         ctx.beginPath();
-        route.forEach(([x, z], i) => { if (i === 0) ctx.moveTo(X(x), Z(z)); else ctx.lineTo(X(x), Z(z)); });
+        route.forEach(([x, z], i) => {
+          if (i === 0) ctx.moveTo(X(x), Z(z));
+          else ctx.lineTo(X(x), Z(z));
+        });
         ctx.stroke();
       }
       ctx.fillStyle = '#ffd25f';
@@ -548,14 +639,14 @@ export function createHud(G) {
       ctx.arc(X(t.x), Z(t.z), 7, 0, Math.PI * 2);
       ctx.fill();
     }
-    // Police.
+    // Police cruisers.
     ctx.fillStyle = '#4080ff';
     for (const cc of G2.police.cruisers) {
       ctx.beginPath();
       ctx.arc(X(cc.x), Z(cc.z), 4, 0, Math.PI * 2);
       ctx.fill();
     }
-    // Player arrow.
+    // Player arrow, rotated to the heading.
     const p = G2.player;
     ctx.save();
     ctx.translate(X(p.x), Z(p.z));
